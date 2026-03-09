@@ -300,10 +300,17 @@ If blocked, output exactly: TASK_BLOCKED: <reason>
 MISSION
 )"
 
+  # Snapshot tree state before task runs (to avoid auto-committing pre-existing files)
+  local pre_snapshot
+  pre_snapshot=$(mktemp /tmp/cc-pre-XXXXXX.txt)
+  cd "$repo_path"
+  git diff --name-only 2>/dev/null > "$pre_snapshot"
+  git ls-files --others --exclude-standard 2>/dev/null >> "$pre_snapshot"
+
   # Execute
   local output_file exit_code=0
   output_file=$(mktemp /tmp/cc-task-XXXXXX.json)
-  trap "rm -f ${output_file}" RETURN
+  trap "rm -f ${output_file} ${pre_snapshot}" RETURN
 
   log "│  Starting Claude Code session..."
 
@@ -332,14 +339,20 @@ except:
     local commit_count
     commit_count=$(git rev-list main..HEAD --count 2>/dev/null || echo "0")
 
-    # Auto-commit leftover changes
-    local dirty_files untracked_files
-    dirty_files=$(git diff --name-only 2>/dev/null | wc -l)
-    untracked_files=$(git ls-files --others --exclude-standard 2>/dev/null | wc -l)
+    # Only auto-commit files that the TASK created/modified (not pre-existing dirty files)
+    local task_dirty_files=()
+    while IFS= read -r f; do
+      [[ -z "$f" ]] && continue
+      if ! grep -qxF "$f" "$pre_snapshot" 2>/dev/null; then
+        task_dirty_files+=("$f")
+      fi
+    done < <(git diff --name-only 2>/dev/null; git ls-files --others --exclude-standard 2>/dev/null)
 
-    if [[ "$dirty_files" -gt 0 || "$untracked_files" -gt 0 ]]; then
-      log "│  Auto-committing ${dirty_files} modified + ${untracked_files} untracked files"
-      git add -A
+    if [[ ${#task_dirty_files[@]} -gt 0 ]]; then
+      log "│  Auto-committing ${#task_dirty_files[@]} task-created files (skipping pre-existing changes)"
+      for f in "${task_dirty_files[@]}"; do
+        git add "$f" 2>/dev/null
+      done
       git commit -m "auto: uncommitted changes from task ${task_id:0:8}
 
 Task: ${title}" 2>/dev/null || true
