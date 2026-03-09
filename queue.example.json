@@ -1,0 +1,22 @@
+[
+  {
+    "id": "example-001",
+    "title": "Write unit tests for user service",
+    "repo": ".",
+    "prompt": "Read src/services/user.ts. Write comprehensive unit tests in src/services/user.test.ts. Cover: create, update, delete, validation errors, edge cases. Use the existing test framework (check package.json). Run the tests and fix any failures. Commit your work.",
+    "authority": "auto_safe",
+    "max_turns": 20,
+    "status": "pending",
+    "created_at": "2026-03-09T00:00:00Z"
+  },
+  {
+    "id": "example-002",
+    "title": "Document the API endpoints",
+    "repo": ".",
+    "prompt": "Read all files in src/routes/. Create docs/api.md documenting every endpoint: method, path, request body, response body, auth requirements. Use markdown tables. Commit your work.",
+    "authority": "auto_safe",
+    "max_turns": 15,
+    "status": "pending",
+    "created_at": "2026-03-09T00:01:00Z"
+  }
+]

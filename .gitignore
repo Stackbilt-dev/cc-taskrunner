@@ -1,0 +1,4 @@
+queue.json
+hooks/settings.json
+/tmp/
+*.log
