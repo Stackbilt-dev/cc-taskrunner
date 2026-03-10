@@ -103,7 +103,7 @@ if not queue:
 else:
     for t in queue:
         status = t.get('status', 'pending')
-        symbol = {'pending': '○', 'running': '▶', 'completed': '✓', 'failed': '✗'}.get(status, '?')
+        symbol = {'pending': '○', 'running': '▶', 'completed': '✓', 'failed': '✗', 'cancelled': '⊘'}.get(status, '?')
         print(f'{symbol} {t[\"id\"][:8]}  {status:10}  {t[\"title\"][:60]}')
 "
 }
@@ -111,13 +111,41 @@ else:
 fetch_next_task() {
   init_queue
   python3 -c "
-import json
+import json, re
+
 with open('$QUEUE_FILE') as f:
     queue = json.load(f)
+
+def extract_issue_refs(title):
+    \"\"\"Extract issue references like [Issue #123] or #123 from a task title.\"\"\"
+    refs = set()
+    # Match [Issue #N] pattern (case-insensitive)
+    for m in re.finditer(r'\[Issue\s+#(\d+)\]', title, re.IGNORECASE):
+        refs.add(int(m.group(1)))
+    return refs
+
+# Collect issue refs from running and recently completed tasks
+active_issue_refs = set()
 for t in queue:
-    if t.get('status') == 'pending':
-        print(json.dumps(t))
-        break
+    if t.get('status') in ('running', 'completed'):
+        active_issue_refs.update(extract_issue_refs(t.get('title', '')))
+
+# Find first pending task that doesn't duplicate an active issue
+for t in queue:
+    if t.get('status') != 'pending':
+        continue
+    task_refs = extract_issue_refs(t.get('title', ''))
+    if task_refs and task_refs & active_issue_refs:
+        # Duplicate detected — mark as cancelled
+        t['status'] = 'cancelled'
+        t['result'] = 'Skipped: duplicate of running/completed task for issue #' + ', #'.join(str(r) for r in sorted(task_refs & active_issue_refs))
+        with open('$QUEUE_FILE', 'w') as f:
+            json.dump(queue, f, indent=2)
+        import sys
+        print(f'[dedup] Skipping task {t[\"id\"][:8]}: duplicate issue ref', file=sys.stderr)
+        continue
+    print(json.dumps(t))
+    break
 else:
     print('')
 "
