@@ -16,6 +16,13 @@
 
 set -euo pipefail
 
+# Force line-buffered stdout so output isn't truncated when run in background
+# (e.g. Claude Code's run_in_background or nohup). Fixes #2.
+if [[ -z "${CC_UNBUFFERED:-}" ]] && command -v stdbuf >/dev/null 2>&1; then
+  export CC_UNBUFFERED=1
+  exec stdbuf -oL "$0" "$@"
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 QUEUE_FILE="${CC_QUEUE_FILE:-${SCRIPT_DIR}/queue.json}"
 HOOKS_DIR="${SCRIPT_DIR}/hooks"
@@ -332,8 +339,8 @@ MISSION
   local pre_snapshot
   pre_snapshot=$(mktemp /tmp/cc-pre-XXXXXX.txt)
   cd "$repo_path"
-  git diff --name-only 2>/dev/null > "$pre_snapshot"
-  git ls-files --others --exclude-standard 2>/dev/null >> "$pre_snapshot"
+  timeout 30 git diff --name-only 2>/dev/null > "$pre_snapshot"
+  timeout 30 git ls-files --others --exclude-standard 2>/dev/null >> "$pre_snapshot"
 
   # Execute
   local output_file exit_code=0
@@ -374,7 +381,7 @@ except:
       if ! grep -qxF "$f" "$pre_snapshot" 2>/dev/null; then
         task_dirty_files+=("$f")
       fi
-    done < <(git diff --name-only 2>/dev/null; git ls-files --others --exclude-standard 2>/dev/null)
+    done < <(timeout 30 git diff --name-only 2>/dev/null; timeout 30 git ls-files --others --exclude-standard 2>/dev/null)
 
     if [[ ${#task_dirty_files[@]} -gt 0 ]]; then
       log "│  Auto-committing ${#task_dirty_files[@]} task-created files (skipping pre-existing changes)"
