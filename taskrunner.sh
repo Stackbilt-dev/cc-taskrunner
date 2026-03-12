@@ -364,7 +364,7 @@ MISSION
   cd "$repo_path"
   unset CLAUDECODE CLAUDE_CODE_ENTRYPOINT 2>/dev/null || true
   eval "$(build_claude_cmd "$mission_prompt" "$max_turns")" \
-    > "$output_file" 2>&1 || exit_code=$?
+    < /dev/null > "$output_file" 2>&1 || exit_code=$?
 
   # Extract result
   local result_text
