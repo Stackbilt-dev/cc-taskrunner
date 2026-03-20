@@ -2,3 +2,8 @@ queue.json
 hooks/settings.json
 /tmp/
 *.log
+# cc-taskrunner worktree protection
+C:*
+node_modules/
+.pnpm-store/
+__pycache__/
