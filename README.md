@@ -177,6 +177,12 @@ Claude Code runs with `--max-turns` to prevent infinite loops and `--dangerously
 
 Every task gets a structured prompt with explicit constraints. The agent is told what NOT to do, scoped to only the task's changes, and required to output a completion signal (`TASK_COMPLETE` or `TASK_BLOCKED`).
 
+**Completion detection** uses a layered approach to avoid false failures:
+
+1. The signal (`TASK_COMPLETE` / `TASK_BLOCKED`) is searched in both the extracted result text and the raw JSON output file
+2. If no signal is found but Claude exited cleanly (exit code 0) **and** produced commits on the task branch, the task is treated as an implicit success with a logged warning
+3. Exit code 3 (no completion signal) is only assigned when no signal is found **and** either Claude exited non-zero or no commits were produced
+
 ## Branch Isolation
 
 Every task runs on its own branch (`auto/{task-id}`). Main is never directly modified.

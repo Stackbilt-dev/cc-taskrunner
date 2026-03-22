@@ -489,17 +489,31 @@ PRBODY
     fi
   fi
 
-  # Check completion signal
+  # Check completion signal — search both the extracted result and the raw
+  # JSON output (the signal may be nested or split across JSON fields).
+  local signal_found=false
   if echo "$result_text" | grep -qF "TASK_COMPLETE"; then
+    signal_found=true
+  elif grep -qF "TASK_COMPLETE" "$output_file" 2>/dev/null; then
+    signal_found=true
+  fi
+
+  if $signal_found; then
     log "│  Completion signal found"
-  elif echo "$result_text" | grep -qF "TASK_BLOCKED"; then
+  elif echo "$result_text" | grep -qF "TASK_BLOCKED" || grep -qF "TASK_BLOCKED" "$output_file" 2>/dev/null; then
     log "│  Task reported BLOCKED"
     exit_code=2
   else
     log "│  WARNING: No completion signal in output"
-    if [[ $exit_code -eq 0 ]]; then
+    # Determine commit count for implicit-success check
+    local final_commit_count="${commit_count:-0}"
+    if [[ $exit_code -eq 0 && "$final_commit_count" -gt 0 ]]; then
+      log "│  Exit code 0 with ${final_commit_count} commit(s) — treating as implicit success"
+    elif [[ $exit_code -eq 0 ]]; then
+      log "│  Exit code 0 but no commits — failing as incomplete"
       exit_code=3
     fi
+    # If exit_code was already non-zero, keep it as-is (don't override to 3)
   fi
 
   # Update queue
