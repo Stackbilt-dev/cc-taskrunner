@@ -242,7 +242,9 @@ Tasks have an `authority` field that controls branch behavior:
 
 ## Origin
 
-cc-taskrunner was extracted from [AEGIS](https://aegis.stackbilt.dev), a production autonomous AI agent system that has executed 80+ tasks across 11 repositories. The safety architecture, branch lifecycle, and mission brief patterns were developed through real production incidents — not theoretical design.
+cc-taskrunner was extracted from [AEGIS](https://aegis.stackbilt.dev/health), a production autonomous AI agent system that has executed 236+ tasks across 16 repositories. The safety architecture, branch lifecycle, and mission brief patterns were developed through real production incidents — not theoretical design.
+
+See AEGIS running live: [System Health Dashboard](https://aegis.stackbilt.dev/health) | [Neural Pulse](https://aegis.stackbilt.dev/pulse)
 
 ## License
 
