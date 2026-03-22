@@ -16,6 +16,7 @@
     "prompt": "Read all files in src/routes/. Create docs/api.md documenting every endpoint: method, path, request body, response body, auth requirements. Use markdown tables. Commit your work.",
     "authority": "auto_safe",
     "max_turns": 15,
+    "blocked_by": ["example-001"],
     "status": "pending",
     "created_at": "2026-03-09T00:01:00Z"
   }

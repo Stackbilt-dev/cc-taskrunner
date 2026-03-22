@@ -67,16 +67,41 @@ For more control, edit `queue.json` directly:
 ```json
 [
   {
-    "id": "any-unique-id",
+    "id": "task-001",
     "title": "Add rate limiting to API",
     "repo": "/path/to/your/project",
     "prompt": "Read src/middleware.ts. Add rate limiting using a sliding window. Max 100 requests per minute per IP. Write tests.",
     "authority": "auto_safe",
     "max_turns": 20,
     "status": "pending"
+  },
+  {
+    "id": "task-002",
+    "title": "Add rate limit tests",
+    "repo": "/path/to/your/project",
+    "prompt": "Write integration tests for the rate limiting middleware added in task-001.",
+    "authority": "auto_safe",
+    "max_turns": 15,
+    "blocked_by": ["task-001"],
+    "status": "pending"
   }
 ]
 ```
+
+### Task Dependencies
+
+Use `blocked_by` to create dependency chains (DAGs). A task won't run until all its blockers have completed:
+
+```json
+{
+  "id": "task-003",
+  "title": "Deploy after tests pass",
+  "blocked_by": ["task-001", "task-002"],
+  "status": "pending"
+}
+```
+
+If a blocker fails, all tasks that depend on it are automatically cancelled.
 
 ### Run Tasks
 

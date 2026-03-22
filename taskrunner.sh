@@ -117,7 +117,7 @@ else:
 fetch_next_task() {
   init_queue
   python3 -c "
-import json, re
+import json, re, sys
 
 with open('$QUEUE_FILE') as f:
     queue = json.load(f)
@@ -125,10 +125,14 @@ with open('$QUEUE_FILE') as f:
 def extract_issue_refs(title):
     \"\"\"Extract issue references like [Issue #123] or #123 from a task title.\"\"\"
     refs = set()
-    # Match [Issue #N] pattern (case-insensitive)
     for m in re.finditer(r'\[Issue\s+#(\d+)\]', title, re.IGNORECASE):
         refs.add(int(m.group(1)))
     return refs
+
+# Build lookup for task statuses
+status_by_id = {t['id']: t.get('status', 'pending') for t in queue}
+completed_ids = {tid for tid, s in status_by_id.items() if s == 'completed'}
+failed_ids = {tid for tid, s in status_by_id.items() if s == 'failed'}
 
 # Collect issue refs from running and recently completed tasks
 active_issue_refs = set()
@@ -136,20 +140,37 @@ for t in queue:
     if t.get('status') in ('running', 'completed'):
         active_issue_refs.update(extract_issue_refs(t.get('title', '')))
 
-# Find first pending task that doesn't duplicate an active issue
+# Find first pending task that passes all gates
 for t in queue:
     if t.get('status') != 'pending':
         continue
+
+    # Gate 1: Dedup — skip if an active task covers the same issue
     task_refs = extract_issue_refs(t.get('title', ''))
     if task_refs and task_refs & active_issue_refs:
-        # Duplicate detected — mark as cancelled
         t['status'] = 'cancelled'
         t['result'] = 'Skipped: duplicate of running/completed task for issue #' + ', #'.join(str(r) for r in sorted(task_refs & active_issue_refs))
         with open('$QUEUE_FILE', 'w') as f:
             json.dump(queue, f, indent=2)
-        import sys
         print(f'[dedup] Skipping task {t[\"id\"][:8]}: duplicate issue ref', file=sys.stderr)
         continue
+
+    # Gate 2: blocked_by — all blockers must be completed
+    blockers = t.get('blocked_by', []) or []
+    if blockers:
+        failed_blockers = [b for b in blockers if b in failed_ids]
+        if failed_blockers:
+            t['status'] = 'cancelled'
+            t['result'] = f'Dependency failed: {failed_blockers[0]}'
+            with open('$QUEUE_FILE', 'w') as f:
+                json.dump(queue, f, indent=2)
+            print(f'[cascade] Cancelling task {t[\"id\"][:8]}: blocker failed', file=sys.stderr)
+            continue
+        unresolved = [b for b in blockers if b not in completed_ids]
+        if unresolved:
+            print(f'[blocked] Skipping task {t[\"id\"][:8]}: waiting on {len(unresolved)} blocker(s)', file=sys.stderr)
+            continue
+
     print(json.dumps(t))
     break
 else:
