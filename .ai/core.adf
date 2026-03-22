@@ -1,0 +1,6 @@
+# Core Rules
+- This is a bash project — no TypeScript, no npm, no build step
+- Safety hooks in hooks/ are the critical path — changes require extra scrutiny
+- queue.json format must remain backward compatible
+- All bash should work on bash 4+ (no bashisms that break on older versions)
+- Python usage is limited to JSON manipulation — no pip dependencies
