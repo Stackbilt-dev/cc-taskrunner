@@ -261,3 +261,7 @@ See AEGIS running live: [System Health Dashboard](https://aegis.stackbilt.dev/he
 Apache License 2.0 — Copyright 2026 Stackbilt LLC
 
 See [LICENSE](LICENSE) for details.
+
+---
+
+Built by [Stackbilt](https://stackbilt.dev) — Apache-2.0 License
