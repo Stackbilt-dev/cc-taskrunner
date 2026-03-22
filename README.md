@@ -1,3 +1,7 @@
+<div align="center">
+<img src="assets/banner.png" alt="cc-taskrunner — autonomous code pipeline" width="100%" />
+</div>
+
 # cc-taskrunner
 
 Autonomous task queue for [Claude Code](https://docs.anthropic.com/en/docs/claude-code) with safety hooks, branch isolation, and automatic PR creation.
