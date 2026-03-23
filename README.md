@@ -8,6 +8,8 @@ Autonomous task queue for [Claude Code](https://code.claude.com/docs) with safet
 
 Queue tasks. Go to sleep. Wake up to PRs.
 
+[![Discord](https://img.shields.io/discord/1485683351393407006?color=7289da&label=Discord&logo=discord&logoColor=white)](https://discord.gg/aJmE8wmQDS) [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
+
 ```
 $ ./taskrunner.sh add "Write unit tests for the auth middleware"
 Added task a1b2c3d4: Write unit tests for the auth middleware
