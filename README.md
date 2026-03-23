@@ -4,7 +4,7 @@
 
 # cc-taskrunner
 
-Autonomous task queue for [Claude Code](https://docs.anthropic.com/en/docs/claude-code) with safety hooks, branch isolation, and automatic PR creation.
+Autonomous task queue for [Claude Code](https://code.claude.com/docs) with safety hooks, branch isolation, and automatic PR creation.
 
 Queue tasks. Go to sleep. Wake up to PRs.
 
@@ -52,7 +52,7 @@ chmod +x taskrunner.sh hooks/*.sh
 ./taskrunner.sh
 ```
 
-**Requirements:** bash 4+, python3, jq, [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) (`claude` on PATH). Optional: `gh` CLI for automatic PR creation.
+**Requirements:** bash 4+, python3, jq, [Claude Code CLI](https://code.claude.com/docs) (`claude` on PATH). Optional: `gh` CLI for automatic PR creation.
 
 ## Usage
 
@@ -252,9 +252,7 @@ Tasks have an `authority` field that controls branch behavior:
 
 ## Origin
 
-cc-taskrunner was extracted from [AEGIS](https://aegis.stackbilt.dev/health), a production autonomous AI agent system that has executed 236+ tasks across 16 repositories. The safety architecture, branch lifecycle, and mission brief patterns were developed through real production incidents — not theoretical design.
-
-See AEGIS running live: [System Health Dashboard](https://aegis.stackbilt.dev/health) | [Neural Pulse](https://aegis.stackbilt.dev/pulse)
+cc-taskrunner was extracted from AEGIS, a production autonomous AI agent system (Stackbilt internal infrastructure) that has executed 236+ tasks across 16 repositories. The safety architecture, branch lifecycle, and mission brief patterns were developed through real production incidents — not theoretical design.
 
 ## License
 

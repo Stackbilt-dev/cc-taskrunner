@@ -1,6 +1,6 @@
 # cc-taskrunner
 
-Autonomous task queue for [Claude Code](https://docs.anthropic.com/en/docs/claude-code) with safety hooks, branch isolation, and automatic PR creation.
+Autonomous task queue for [Claude Code](https://code.claude.com/docs) with safety hooks, branch isolation, and automatic PR creation.
 
 Queue tasks. Go to sleep. Wake up to PRs.
 
@@ -61,7 +61,7 @@ It checks queue status, exit codes, Claude Code process state, and provides debu
 ## Requirements
 
 - bash 4+, python3, jq
-- [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) (`claude` on PATH)
+- [Claude Code CLI](https://code.claude.com/docs) (`claude` on PATH)
 - Optional: `gh` CLI for automatic PR creation
 
 ## Environment Variables

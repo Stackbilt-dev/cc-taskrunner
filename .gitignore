@@ -7,8 +7,3 @@ C:*
 node_modules/
 .pnpm-store/
 __pycache__/
-# cc-taskrunner worktree protection
-C:*
-node_modules/
-.pnpm-store/
-__pycache__/
