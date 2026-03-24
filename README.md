@@ -136,6 +136,8 @@ If a blocker fails, all tasks that depend on it are automatically cancelled.
 | `CC_POLL_INTERVAL` | `60` | Seconds between polls in `--loop` mode |
 | `CC_MAX_TASKS` | `0` (unlimited) | Max tasks per run |
 | `CC_MAX_TURNS` | `25` | Default Claude Code turns per task |
+| `CC_REPOS_DIR` | *(unset)* | Base directory for repo lookups (e.g. `~/repos`) |
+| `CC_REPO_ALIASES` | `./repo-aliases.conf` | Path to repo alias file (`name=directory` per line) |
 
 ## Safety Architecture
 

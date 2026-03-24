@@ -10,9 +10,10 @@ Autonomous task queue for Claude Code with safety hooks, branch isolation, and P
 - `./taskrunner.sh add "title"` — Add a task to the queue
 
 ## Structure
-- `taskrunner.sh` — Main script (~580 lines bash + embedded python)
-- `hooks/` — Safety hook scripts (block-interactive, safety-gate, syntax-check, deploy)
+- `taskrunner.sh` — Main script (~610 lines bash + embedded python)
+- `hooks/` — Safety hook scripts (block-interactive, safety-gate, syntax-check)
 - `queue.json` — Task queue file (JSON array, gitignored; see queue.example.json)
+- `repo-aliases.conf` — Repo alias mappings (gitignored; see repo-aliases.example.conf)
 - `scripts/` — Helper scripts (deploy)
 - `plugin/` — Plugin system (agents, commands, safety)
 

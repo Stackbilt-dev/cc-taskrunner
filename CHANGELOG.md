@@ -4,11 +4,42 @@ All notable changes to cc-taskrunner will be documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
-## [0.3.0] — 2026-03-11
+## [1.2.0] — 2026-03-24
 
 ### Added
-- Claude Code plugin for submission to anthropics/claude-code
+- Repo alias resolution via `repo-aliases.conf` file (`CC_REPO_ALIASES` env var)
+- `CC_REPOS_DIR` env var for configurable base directory for repo lookups
+- `.gitattributes` to enforce LF line endings for shell scripts
+
+### Fixed
+- CRLF line endings across all shell scripts (caused bash parse errors on Linux/WSL)
+- Repo resolution now checks: alias → direct path → `REPOS_DIR/resolved` → `REPOS_DIR/original`
+
+## [1.1.0] — 2026-03-22
+
+### Added
+- DAG task dependencies via `blocked_by` field with automatic cascade cancellation
+- Issue dedup guard — skips tasks targeting the same GitHub issue as a running/completed task
+- Robust completion signal detection — reduces false Exit Code 3 failures
+- CLAUDE.md and `.ai/` governance files
+- Hero banner and Discord invite badge in README
+
+### Fixed
+- Restructured LICENSE for GitHub detection
+- OSS standardization: license copyright, branding footer
+
+## [1.0.0] — 2026-03-11
+
+### Added
+- Reliability features synced from AEGIS: PR state check, auth probe, LOC guardrail, completion heuristics, circuit breaker, failure classification, preflight
+- Claude Code plugin (`plugin/`) for submission to anthropics/claude-code
 - Deploy pipeline script (`scripts/deploy.sh`)
+
+### Fixed
+- Background output truncation — force line-buffered stdout via `stdbuf`
+- Git operation timeouts
+- Windows-path directory pollution in `.gitignore`
+- Redirect stdin from `/dev/null` to prevent SIGTSTP hang
 
 ## [0.2.0] — 2026-03-10
 
