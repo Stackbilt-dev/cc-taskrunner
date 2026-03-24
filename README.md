@@ -261,3 +261,7 @@ cc-taskrunner was extracted from AEGIS, a production autonomous AI agent system 
 Apache License 2.0 — Copyright 2026 Stackbilt LLC
 
 See [LICENSE](LICENSE) for details.
+
+---
+
+Built by [Stackbilt](https://stackbilt.dev) — Apache-2.0 License
