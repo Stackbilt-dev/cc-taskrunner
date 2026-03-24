@@ -24,9 +24,20 @@ HOOKS_SETTINGS=""
 POLL_INTERVAL="${CC_POLL_INTERVAL:-60}"
 MAX_TASKS="${CC_MAX_TASKS:-0}"  # 0 = unlimited
 MAX_TURNS="${CC_MAX_TURNS:-25}"
+REPOS_DIR="${CC_REPOS_DIR:-}"  # Base directory for repo lookups
 DRY_RUN=false
 LOOP_MODE=false
 TASKS_RUN=0
+
+# ─── Repo aliases ───────────────────────────────────────────
+# Alias file: one "alias=directory" per line (e.g. smart_revenue_recovery=smart_revenue_recovery_adf)
+declare -A REPO_ALIASES
+if [[ -f "${CC_REPO_ALIASES:-${SCRIPT_DIR}/repo-aliases.conf}" ]]; then
+  while IFS='=' read -r key val; do
+    [[ -z "$key" || "$key" = "#"* ]] && continue
+    REPO_ALIASES["${key// /}"]="${val// /}"
+  done < "${CC_REPO_ALIASES:-${SCRIPT_DIR}/repo-aliases.conf}"
+fi
 
 # ─── Parse args ──────────────────────────────────────────────
 
@@ -252,14 +263,23 @@ execute_task() {
     return 0
   fi
 
-  # Resolve repo path
-  local repo_path
-  if [[ "$repo" == "." ]]; then
+  # Resolve repo path (supports aliases and CC_REPOS_DIR)
+  local repo_path resolved_name
+  resolved_name="${REPO_ALIASES[$repo]:-$repo}"
+  if [[ "$resolved_name" != "$repo" ]]; then
+    log "│  Alias: ${repo} → ${resolved_name}"
+  fi
+
+  if [[ "$resolved_name" == "." ]]; then
     repo_path="$(pwd)"
-  elif [[ -d "$repo" ]]; then
-    repo_path="$(cd "$repo" && pwd)"
+  elif [[ -d "$resolved_name" ]]; then
+    repo_path="$(cd "$resolved_name" && pwd)"
+  elif [[ -n "$REPOS_DIR" && -d "${REPOS_DIR}/${resolved_name}" ]]; then
+    repo_path="$(cd "${REPOS_DIR}/${resolved_name}" && pwd)"
+  elif [[ -n "$REPOS_DIR" && -d "${REPOS_DIR}/${repo}" ]]; then
+    repo_path="$(cd "${REPOS_DIR}/${repo}" && pwd)"
   else
-    err "Repo not found: ${repo}"
+    err "Repo not found: ${repo}${resolved_name:+ (resolved: ${resolved_name})}"
     update_task_status "$task_id" "failed" "Repo not found: ${repo}"
     return 1
   fi
