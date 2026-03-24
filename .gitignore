@@ -1,4 +1,5 @@
 queue.json
+repo-aliases.conf
 hooks/settings.json
 /tmp/
 *.log
