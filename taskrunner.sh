@@ -338,13 +338,35 @@ execute_task() {
     git checkout main 2>/dev/null || git checkout master 2>/dev/null
     git pull --ff-only 2>/dev/null || true
 
-    # Create or reset task branch
-    if git rev-parse --verify "$branch" >/dev/null 2>&1; then
-      git checkout "$branch"
-      git reset --hard main 2>/dev/null
-    else
-      git checkout -b "$branch"
+    # Check both local AND remote refs for existing branch (#14)
+    # Prior bug: only checked local refs, missed remote-only branches left by
+    # worktree cleanup. Those stale remote branches caused push failures.
+    git fetch origin --prune --quiet 2>/dev/null || true
+    local has_local_branch=false has_remote_branch=false
+    git rev-parse --verify "refs/heads/${branch}" >/dev/null 2>&1 && has_local_branch=true
+    git show-ref --verify --quiet "refs/remotes/origin/${branch}" 2>/dev/null && has_remote_branch=true
+
+    if $has_local_branch || $has_remote_branch; then
+      if $has_remote_branch; then
+        # Check if a stale PR is still open — close it
+        if command -v gh >/dev/null 2>&1; then
+          local remote_url_check repo_slug_check pr_state
+          remote_url_check=$(git remote get-url origin 2>/dev/null)
+          repo_slug_check=$(echo "$remote_url_check" | sed -E 's|.*github\.com[:/](.+)(\.git)?$|\1|' | sed 's/\.git$//')
+          pr_state=$(gh pr view "$branch" --repo "$repo_slug_check" --json state --jq .state 2>/dev/null || echo "NONE")
+          if [[ "$pr_state" == "OPEN" ]]; then
+            log "│  Closing stale PR on ${branch} (prior run left it open)"
+            gh pr close "$branch" --repo "$repo_slug_check" --comment "Superseded by task re-run (${task_id})" 2>/dev/null || true
+          fi
+        fi
+        git push origin --delete "$branch" 2>/dev/null || true
+      fi
+      if $has_local_branch; then
+        git branch -D "$branch" 2>/dev/null || true
+      fi
     fi
+
+    git checkout -b "$branch"
     log "│  Branch: ${branch}"
 
     # Seed .gitignore to block Windows-path directories that agents sometimes
@@ -407,13 +429,30 @@ MISSION
   eval "$(build_claude_cmd "$mission_prompt" "$max_turns")" \
     < /dev/null > "$output_file" 2>&1 || exit_code=$?
 
+  # Detect max_turns exceeded from JSON output (#15)
+  local max_turns_exceeded=false
+  if grep -qF '"error_max_turns"' "$output_file" 2>/dev/null; then
+    max_turns_exceeded=true
+    log "│  Claude hit max_turns limit (${max_turns} turns) — checking for completion evidence"
+  fi
+
   # Extract result
   local result_text
   result_text=$(python3 -c '
 import json, sys
 try:
     data = json.load(open(sys.argv[1]))
-    print(data.get("result", ""))
+    subtype = data.get("subtype", "")
+    if subtype == "error_max_turns":
+        turns = data.get("num_turns", "?")
+        cost = data.get("total_cost_usd", 0)
+        print(f"[max_turns_exceeded] Task ran out of turns ({turns} used, ${cost:.2f}). Increase max_turns or simplify the task.")
+    else:
+        text = data.get("result", "")
+        if text and not text.lstrip().startswith("{"):
+            print(text)
+        else:
+            print("")
 except:
     with open(sys.argv[1]) as f:
         print(f.read()[:4000])
@@ -450,7 +489,7 @@ Task: ${title}" 2>/dev/null || true
     # Push and create PR if there are commits
     if [[ "$commit_count" -gt 0 ]]; then
       log "│  Pushing ${commit_count} commit(s) to ${branch}..."
-      git push -u origin "$branch" 2>/dev/null || true
+      git push --force-with-lease -u origin "$branch" 2>/dev/null || true
 
       # Create PR if gh CLI is available
       if command -v gh >/dev/null 2>&1; then
@@ -507,6 +546,13 @@ PRBODY
     if [[ "$stashed" == "true" ]]; then
       git stash pop 2>/dev/null && log "│  Restored stashed changes" || log "│  WARNING: stash pop failed"
     fi
+  fi
+
+  # Annotate result text with max_turns info if applicable (#15)
+  if $max_turns_exceeded; then
+    result_text="[max_turns_exceeded] Task ran out of turns (${max_turns} used). Increase max_turns or simplify the task.
+
+${result_text}"
   fi
 
   # Check completion signal — search both the extracted result and the raw

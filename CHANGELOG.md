@@ -4,6 +4,12 @@ All notable changes to cc-taskrunner will be documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.3.0] — 2026-03-29
+
+### Fixed
+- **Branch conflict resolution** (#14) — branch cleanup now checks both local AND remote refs before creating task branches. Prior bug: only checked local refs, missed remote-only branches left by worktree cleanup. Stale PRs are auto-closed with comment. Push uses `--force-with-lease` for clean branch reuse.
+- **max_turns_exceeded detection** (#15) — Claude's `error_max_turns` JSON subtype is now detected and annotated in result text as `[max_turns_exceeded]`. Consumers can distinguish this from generic failures and decide whether to retry with more turns. Tasks that hit max_turns but created PRs may still be successful.
+
 ## [1.2.0] — 2026-03-24
 
 ### Added
