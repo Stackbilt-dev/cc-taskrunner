@@ -246,6 +246,16 @@ ensure_hooks_settings() {
           }
         ]
       }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ${HOOKS_DIR}/stop-checkpoint.sh"
+          }
+        ]
+      }
     ]
   }
 }
@@ -253,19 +263,49 @@ SETTINGS
   fi
 }
 
+# ─── Cross-repo dir detection ────────────────────────────────
+
+detect_cross_repo_dirs() {
+  # Scan task prompt for references to other repos under REPOS_DIR.
+  # Returns newline-separated list of repo paths (excluding the primary repo).
+  local prompt="$1" primary_repo="$2"
+
+  [[ -z "$REPOS_DIR" ]] && return 0
+
+  local dir dirname
+  for dir in "$REPOS_DIR"/*/; do
+    [[ -d "$dir" ]] || continue
+    dirname=$(basename "$dir")
+    [[ "$dirname" == "$primary_repo" ]] && continue
+    if echo "$prompt" | grep -qi "$dirname" && git -C "$dir" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+      echo "$dir"
+    fi
+  done
+}
+
 # ─── Build Claude command ────────────────────────────────────
 
 build_claude_cmd() {
-  local prompt="$1" max_turns="$2"
+  local prompt="$1" max_turns="$2" add_dirs="${3:-}"
 
   local cmd=(
     claude
     -p "$prompt"
+    --bare
     --dangerously-skip-permissions
     --output-format json
     --max-turns "$max_turns"
     --settings "$HOOKS_SETTINGS"
   )
+  # --bare: skip CLAUDE.md discovery, MCP init, auto-memory for faster startup.
+  # Hooks still load via explicit --settings. Work dir passed via --add-dir below.
+
+  # Cross-repo access and CLAUDE.md discovery via --add-dir
+  if [[ -n "$add_dirs" ]]; then
+    while IFS= read -r dir; do
+      [[ -n "$dir" && -d "$dir" ]] && cmd+=(--add-dir "$dir")
+    done <<< "$add_dirs"
+  fi
 
   printf '%q ' "${cmd[@]}"
 }
@@ -418,16 +458,40 @@ MISSION
   timeout 30 git ls-files --others --exclude-standard 2>/dev/null >> "$pre_snapshot"
 
   # Execute
-  local output_file exit_code=0
+  local output_file checkpoint_file exit_code=0
   output_file=$(mktemp /tmp/cc-task-XXXXXX.json)
-  trap "rm -f ${output_file} ${pre_snapshot}" RETURN
+  checkpoint_file=$(mktemp /tmp/cc-task-checkpoint-XXXXXX.json)
+  trap "rm -f ${output_file} ${pre_snapshot} ${checkpoint_file}" RETURN
+
+  # Detect cross-repo dirs for --add-dir (prompt may reference other repos)
+  local cross_repo_dirs=""
+  if [[ -n "$REPOS_DIR" ]]; then
+    cross_repo_dirs=$(detect_cross_repo_dirs "$prompt $title" "$(basename "$repo_path")" 2>/dev/null || echo "")
+    if [[ -n "$cross_repo_dirs" ]]; then
+      log "│  Cross-repo access: $(echo "$cross_repo_dirs" | tr '\n' ',' | sed 's/,$//')"
+    fi
+  fi
+
+  # --bare requires explicit ANTHROPIC_API_KEY (OAuth/keychain disabled)
+  if [[ -z "${ANTHROPIC_API_KEY:-}" ]]; then
+    log "│  WARNING: ANTHROPIC_API_KEY not set — --bare mode requires explicit API key"
+  fi
+
+  # --bare skips CLAUDE.md auto-discovery; always pass repo_path as first --add-dir
+  local all_dirs="$repo_path"
+  if [[ -n "$cross_repo_dirs" ]]; then
+    all_dirs="${all_dirs}
+${cross_repo_dirs}"
+  fi
 
   log "│  Starting Claude Code session..."
 
   cd "$repo_path"
   unset CLAUDECODE CLAUDE_CODE_ENTRYPOINT 2>/dev/null || true
-  eval "$(build_claude_cmd "$mission_prompt" "$max_turns")" \
+  export CC_CHECKPOINT_FILE="$checkpoint_file"
+  eval "$(build_claude_cmd "$mission_prompt" "$max_turns" "$all_dirs")" \
     < /dev/null > "$output_file" 2>&1 || exit_code=$?
+  unset CC_CHECKPOINT_FILE
 
   # Detect max_turns exceeded from JSON output (#15)
   local max_turns_exceeded=false
