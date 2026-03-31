@@ -45,4 +45,17 @@ if echo "$CMD" | grep -qiE '(wrangler\s+secret|echo\s+.*API_KEY|echo\s+.*TOKEN|e
   exit 2
 fi
 
+# Package manager installs without lockfile enforcement
+# Prevents supply chain attacks via unattended installs (e.g. axios 2026-03-31 RAT).
+# Safe alternatives: npm ci, pnpm install --frozen-lockfile, yarn install --frozen-lockfile
+if echo "$CMD" | grep -qiE '\bnpm\s+install\b' && ! echo "$CMD" | grep -qiE '(npm\s+ci\b|--frozen-lockfile|--lockfile-only)'; then
+  echo "BLOCKED: 'npm install' without lockfile enforcement not allowed in autonomous mode. Use 'npm ci' instead." >&2
+  exit 2
+fi
+
+if echo "$CMD" | grep -qiE '\b(yarn|pnpm)\s+install\b' && ! echo "$CMD" | grep -qiE '(--frozen-lockfile|--lockfile-only)'; then
+  echo "BLOCKED: 'yarn/pnpm install' without --frozen-lockfile not allowed in autonomous mode." >&2
+  exit 2
+fi
+
 exit 0
