@@ -4,6 +4,13 @@ All notable changes to cc-taskrunner will be documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.4.1] — 2026-04-09
+
+### Fixed
+- **Empty stash accumulation** (#19) — The auto-stash preflight in `taskrunner.sh` and `plugin/taskrunner.sh` used `[[ -n "$(git status --porcelain)" ]]` as the dirty-state check combined with `git stash push --include-untracked`. That triggered on any dirty state including untracked noise (charter telemetry, build artifacts), which created empty stash objects that piled up indefinitely. Downstream evidence: one operator found 10 accumulated stashes, 9 of which were empty and the 10th contained only 36 lines of telemetry noise.
+
+  New logic only stashes when `git diff --quiet` or `git diff --cached --quiet` detect real tracked changes. The `--include-untracked` flag was removed. After the `stash push`, the stash is verified against its parent; empty stashes are dropped immediately as a belt-and-suspenders guard against races.
+
 ## [1.4.0] — 2026-04-09
 
 ### Added
