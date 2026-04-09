@@ -83,6 +83,119 @@ build_fingerprint() {
   echo "$output" | head -n 80
 }
 
+# ─── Blast radius preflight (optional) ──────────────────────
+# Calls `charter blast --format json` on files referenced by the task
+# prompt to compute the blast radius: which other files transitively
+# import the seeds. Used as a preflight gate — tasks classified as
+# `auto_safe` are downgraded to require operator approval when the
+# blast radius is critical (default ≥50 files).
+#
+# Severity ladder:
+#   low      : 0–4   affected files
+#   medium   : 5–19  affected files
+#   high     : 20–49 affected files (emits warning in mission brief)
+#   critical : 50+   affected files (blocks auto_safe execution)
+#
+# Environment knobs:
+#   CC_DISABLE_BLAST=1          — opt out entirely
+#   CC_BLAST_WARN=<n>           — high threshold (default: 20)
+#   CC_BLAST_BLOCK=<n>          — critical threshold (default: 50)
+#   CC_BLAST_TIMEOUT=<seconds>  — charter blast timeout (default: 60)
+#
+# Emits compact JSON on stdout when successful, empty when skipped.
+# Gracefully no-ops when charter is unavailable or no files are found.
+compute_blast_radius() {
+  local prompt="$1" repo_path="$2"
+  local disabled="${CC_DISABLE_BLAST:-0}"
+  if [[ "$disabled" = "1" ]]; then return 0; fi
+  if ! command -v charter >/dev/null 2>&1; then return 0; fi
+  if [[ ! -d "$repo_path" ]]; then return 0; fi
+
+  # Extract file paths from the prompt and filter to ones that exist
+  local files
+  files=$(echo "$prompt" | grep -oE '[a-zA-Z0-9_./-]+\.(ts|tsx|js|jsx|mjs|cjs)' | sort -u)
+  if [[ -z "$files" ]]; then return 0; fi
+
+  local seed_args=()
+  while IFS= read -r f; do
+    [[ -z "$f" ]] && continue
+    if [[ -f "${repo_path}/${f}" ]]; then
+      seed_args+=("$f")
+    fi
+  done <<< "$files"
+  if [[ ${#seed_args[@]} -eq 0 ]]; then return 0; fi
+
+  # Cap seeds at 10 so a runaway prompt can't explode the blast call
+  if [[ ${#seed_args[@]} -gt 10 ]]; then
+    seed_args=("${seed_args[@]:0:10}")
+  fi
+
+  local blast_timeout="${CC_BLAST_TIMEOUT:-60}"
+  local blast_json
+  blast_json=$(cd "$repo_path" && timeout "$blast_timeout" charter blast "${seed_args[@]}" --format json 2>/dev/null || true)
+  if [[ -z "$blast_json" ]]; then return 0; fi
+
+  local warn_threshold="${CC_BLAST_WARN:-20}"
+  local block_threshold="${CC_BLAST_BLOCK:-50}"
+  BLAST_RAW="$blast_json" BLAST_WARN="$warn_threshold" BLAST_BLOCK="$block_threshold" python3 -c '
+import json, os, sys
+try:
+    d = json.loads(os.environ["BLAST_RAW"])
+except Exception:
+    sys.exit(0)
+warn = int(os.environ.get("BLAST_WARN", "20"))
+block = int(os.environ.get("BLAST_BLOCK", "50"))
+affected = int(d.get("summary", {}).get("totalAffected", 0))
+seeds = d.get("seeds", []) or []
+hot_files = d.get("hotFiles", []) or []
+if affected >= block:
+    severity = "critical"
+elif affected >= warn:
+    severity = "high"
+elif affected >= 5:
+    severity = "medium"
+else:
+    severity = "low"
+hot_set = {h.get("file") for h in hot_files[:20]}
+hot_file = any(s in hot_set for s in seeds)
+print(json.dumps({
+    "seeds": seeds,
+    "affected": affected,
+    "severity": severity,
+    "hot_file": hot_file,
+    "top_hot_files": hot_files[:5],
+}))
+'
+}
+
+# Render blast radius as a mission brief warning section.
+# Returns non-empty string only for `high` and `critical` severities.
+render_blast_warning() {
+  local blast_json="$1"
+  [[ -z "$blast_json" ]] && return 0
+  BLAST="$blast_json" python3 -c '
+import json, os, sys
+try:
+    b = json.loads(os.environ["BLAST"])
+except Exception:
+    sys.exit(0)
+sev = b.get("severity", "")
+if sev not in ("high", "critical"):
+    sys.exit(0)
+affected = b.get("affected", 0)
+seed_list = ", ".join(b.get("seeds", []))
+lines = []
+lines.append("")
+lines.append("## Blast Radius Warning")
+lines.append(f"- Severity: **{sev.upper()}** — {affected} files affected")
+lines.append(f"- Seed files: {seed_list}")
+if b.get("hot_file"):
+    lines.append("- One or more seeds are in the top 20 most-imported files (architectural hub)")
+lines.append("- Treat this as CROSS_CUTTING: review carefully before merging")
+print("\n".join(lines))
+'
+}
+
 # ─── Queue management ───────────────────────────────────────
 
 init_queue() {
@@ -477,6 +590,33 @@ FPRINT
     log "│  Fingerprint: $(echo "$fingerprint" | grep -cE '^- ' || echo 0) items injected"
   fi
 
+  # ─── Blast radius preflight gate ─────────────────────────
+  # If charter blast reports a critical radius on files referenced by the
+  # task prompt, refuse to execute auto_safe tasks. Forces operator review.
+  local blast_json blast_warning_section=""
+  blast_json="$(compute_blast_radius "$prompt" "$repo_path" || true)"
+  if [[ -n "$blast_json" ]]; then
+    local blast_severity blast_affected
+    blast_severity=$(echo "$blast_json" | python3 -c 'import json,sys
+try: print(json.load(sys.stdin).get("severity",""))
+except: print("")' 2>/dev/null || echo "")
+    blast_affected=$(echo "$blast_json" | python3 -c 'import json,sys
+try: print(int(json.load(sys.stdin).get("affected",0)))
+except: print(0)' 2>/dev/null || echo "0")
+
+    if [[ "$blast_severity" = "critical" && "$authority" = "auto_safe" ]]; then
+      log "│  ⚠ GATE: blast radius critical (${blast_affected} files) — refusing auto_safe execution"
+      update_task_status "$task_id" "failed" "TASK_BLOCKED: blast_radius_critical — ${blast_affected} files affected. Requires operator approval (change authority to 'operator' and re-queue)."
+      return 0
+    fi
+
+    # High/critical render a warning into the mission brief (non-empty for those tiers only)
+    blast_warning_section="$(render_blast_warning "$blast_json")"
+    if [[ -n "$blast_warning_section" ]]; then
+      log "│  Blast radius: ${blast_severity} (${blast_affected} files) — warning injected"
+    fi
+  fi
+
   # Build mission prompt
   local mission_prompt
   mission_prompt="$(cat <<MISSION
@@ -487,6 +627,7 @@ Read files before modifying them. Be thorough.
 
 ## Task
 ${title}
+${blast_warning_section}
 ${fingerprint_section}
 
 ## Instructions
