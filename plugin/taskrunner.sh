@@ -315,10 +315,25 @@ execute_task() {
     use_branch=true
     branch="auto/${task_id:0:8}"
 
-    # Stash uncommitted changes to protect live work
-    if [[ -n "$(git status --porcelain 2>/dev/null)" ]]; then
-      git stash push -m "cc-taskrunner:${task_id:0:8}" --include-untracked 2>/dev/null && stashed=true
-      log "│  Stashed uncommitted changes"
+    # Stash uncommitted TRACKED changes to protect live work.
+    # Only stashes real tracked diffs — untracked files alone are usually
+    # noise (telemetry, build artifacts) and produce empty stashes that
+    # accumulate indefinitely. See #19 for full bug report.
+    local has_tracked_dirty=false
+    if ! git diff --quiet 2>/dev/null; then has_tracked_dirty=true; fi
+    if ! git diff --cached --quiet 2>/dev/null; then has_tracked_dirty=true; fi
+
+    if $has_tracked_dirty; then
+      if git stash push -m "cc-taskrunner:${task_id:0:8}" 2>/dev/null; then
+        # Verify the stash captured content (drop if empty, race guard)
+        if ! git diff stash@{0}^1 stash@{0} --quiet 2>/dev/null; then
+          stashed=true
+          log "│  Stashed uncommitted tracked changes"
+        else
+          git stash drop stash@{0} 2>/dev/null || true
+          log "│  Stash was empty after push — dropped"
+        fi
+      fi
     fi
 
     # Start from main
