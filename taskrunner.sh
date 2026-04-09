@@ -75,8 +75,9 @@ build_fingerprint() {
   local disabled="${CC_DISABLE_FINGERPRINT:-0}"
   if [[ "$disabled" = "1" ]]; then return 0; fi
   if ! command -v charter >/dev/null 2>&1; then return 0; fi
+  local fp_timeout="${CC_FINGERPRINT_TIMEOUT:-60}"
   local output
-  output=$(timeout 20 charter surface --root "$repo_path" --markdown 2>/dev/null || true)
+  output=$(timeout "$fp_timeout" charter surface --root "$repo_path" --markdown 2>/dev/null || true)
   if [[ -z "$output" ]]; then return 0; fi
   # Cap at ~80 lines to keep mission brief under budget
   echo "$output" | head -n 80
