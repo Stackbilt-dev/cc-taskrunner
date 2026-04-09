@@ -4,6 +4,15 @@ All notable changes to cc-taskrunner will be documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.5.0] — 2026-04-09
+
+### Added
+- **Blast radius preflight gate** (#20) — Mission briefs now compute a blast radius via `charter blast --format json` on file paths extracted from the prompt. Severity ladder: `low` (0–4 affected), `medium` (5–19), `high` (20–49), `critical` (50+). Tasks classified as `auto_safe` with `critical` severity are **refused** — the runner logs `TASK_BLOCKED`, marks the task failed with an explanation, and returns without spawning Claude. `high` and `critical` severities inject a `## Blast Radius Warning` section into the mission brief so the agent knows the scope.
+
+  Requires `@stackbilt/cli >= 0.10.0` on PATH. Graceful no-op when charter is unavailable. Opt out entirely via `CC_DISABLE_BLAST=1`. Thresholds configurable via `CC_BLAST_WARN` (default `20`) and `CC_BLAST_BLOCK` (default `50`). Timeout via `CC_BLAST_TIMEOUT` (default `60s`). Seed file count capped at 10 to prevent runaway prompts from exploding the blast call.
+
+  Applied symmetrically to `taskrunner.sh` and `plugin/taskrunner.sh`.
+
 ## [1.4.1] — 2026-04-09
 
 ### Fixed

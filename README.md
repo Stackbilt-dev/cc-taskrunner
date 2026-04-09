@@ -138,6 +138,58 @@ If a blocker fails, all tasks that depend on it are automatically cancelled.
 | `CC_MAX_TURNS` | `25` | Default Claude Code turns per task |
 | `CC_REPOS_DIR` | *(unset)* | Base directory for repo lookups (e.g. `~/repos`) |
 | `CC_REPO_ALIASES` | `./repo-aliases.conf` | Path to repo alias file (`name=directory` per line) |
+| `CC_DISABLE_FINGERPRINT` | `0` | Set to `1` to skip the `charter surface` fingerprint injection |
+| `CC_FINGERPRINT_TIMEOUT` | `60` | Timeout in seconds for `charter surface` (per task) |
+| `CC_DISABLE_BLAST` | `0` | Set to `1` to skip the `charter blast` preflight gate entirely |
+| `CC_BLAST_WARN` | `20` | Blast radius threshold for `high` severity (warning injected into mission brief) |
+| `CC_BLAST_BLOCK` | `50` | Blast radius threshold for `critical` severity (auto_safe execution refused) |
+| `CC_BLAST_TIMEOUT` | `60` | Timeout in seconds for `charter blast` (per task) |
+
+## Charter Integration (optional)
+
+cc-taskrunner can optionally call [`@stackbilt/cli`](https://github.com/Stackbilt-dev/charter) during preflight to make mission briefs smarter. Both integrations are **no-ops when charter isn't installed**, so this is strictly additive.
+
+### 1. Project fingerprint — `charter surface`
+
+When `charter surface --markdown` is available on `PATH`, the runner injects a `## Project Context (auto-generated)` section into the mission brief. The section lists HTTP routes (Hono/Express/itty-router) and D1 schema tables so the agent starts with layout awareness instead of burning turns exploring the codebase.
+
+- Output is capped at 80 lines to protect the prompt budget
+- Opt out: `CC_DISABLE_FINGERPRINT=1`
+- Timeout: `CC_FINGERPRINT_TIMEOUT` (default `60s`)
+
+### 2. Blast radius preflight gate — `charter blast`
+
+When `charter blast --format json` is available, the runner extracts file paths from the task prompt and computes the blast radius — the set of files that transitively import the seeds. If the blast is large enough, the gate refuses to execute `auto_safe` tasks before any turns are burned.
+
+**Severity ladder:**
+
+| Affected files | Severity | Behavior |
+|---|---|---|
+| 0–4 | `low` | silent |
+| 5–19 | `medium` | silent |
+| 20–49 | `high` | warning injected into mission brief |
+| 50+ | `critical` | warning injected; **`auto_safe` execution refused** |
+
+**When the gate fires,** the runner logs `⚠ GATE: blast radius critical ...`, calls `update_task_status` with `status=failed` and a `TASK_BLOCKED: blast_radius_critical` result, and returns without spawning Claude. The operator can force execution by changing the task's `authority` to `operator` and re-queuing.
+
+**When the warning is injected** (high or critical), the mission brief gains a section like:
+
+```markdown
+## Blast Radius Warning
+- Severity: **CRITICAL** — 72 files affected
+- Seed files: src/kernel/dispatch.ts
+- One or more seeds are in the top 20 most-imported files (architectural hub)
+- Treat this as CROSS_CUTTING: review carefully before merging
+```
+
+**Tuning:**
+- Opt out entirely: `CC_DISABLE_BLAST=1`
+- Raise/lower thresholds: `CC_BLAST_WARN=30`, `CC_BLAST_BLOCK=100`
+- Timeout: `CC_BLAST_TIMEOUT` (default `60s`)
+- Seed file count is internally capped at 10 to prevent runaway prompts from exploding the blast call
+- Only `.ts` / `.tsx` / `.js` / `.jsx` / `.mjs` / `.cjs` files are recognized as seeds
+
+**Requires:** `@stackbilt/cli >= 0.10.0` on `PATH`. Install with `npm install -g @stackbilt/cli`.
 
 ## Safety Architecture
 
