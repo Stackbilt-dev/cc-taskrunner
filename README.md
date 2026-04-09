@@ -205,7 +205,9 @@ main ─────────────────────────
   └── auto/i9j0k1l2 ── commit ── commit ── PR → (task 3)
 ```
 
-Before creating a branch, cc-taskrunner stashes any uncommitted work in the repo. After the task completes (or fails), it returns to main and restores the stash. Your in-progress work is never clobbered.
+Before creating a branch, cc-taskrunner checks for **real tracked changes** via `git diff --quiet` and `git diff --cached --quiet`. If either shows uncommitted work, it stashes those tracked changes (staged or unstaged) and proceeds. Untracked files are left alone — they're usually build artifacts, telemetry, or IDE lockfiles that would create empty stash objects if captured. After the task completes (or fails), the runner returns to main and restores the stash. Your in-progress work is never clobbered.
+
+The runner also verifies each stash actually captured content (by diffing against its parent) and drops any empty stash immediately. This prevents `git stash list` from accumulating noise over hundreds of autonomous runs.
 
 If a task produces no commits (e.g., a research/analysis task), the empty branch is cleaned up automatically.
 
