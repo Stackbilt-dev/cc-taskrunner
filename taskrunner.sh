@@ -65,6 +65,23 @@ done
 log() { echo "[$(date '+%H:%M:%S')] $*"; }
 err() { echo "[$(date '+%H:%M:%S')] ERROR: $*" >&2; }
 
+# ─── Project fingerprint (optional) ──────────────────────────
+# Calls `charter surface --markdown` on the target repo to produce a
+# compact API-surface map (routes + schema). Injected into the mission
+# brief so Claude Code doesn't need to spend turns exploring the layout.
+# Gracefully degrades to empty output if charter is unavailable.
+build_fingerprint() {
+  local repo_path="$1"
+  local disabled="${CC_DISABLE_FINGERPRINT:-0}"
+  if [[ "$disabled" = "1" ]]; then return 0; fi
+  if ! command -v charter >/dev/null 2>&1; then return 0; fi
+  local output
+  output=$(timeout 20 charter surface --root "$repo_path" --markdown 2>/dev/null || true)
+  if [[ -z "$output" ]]; then return 0; fi
+  # Cap at ~80 lines to keep mission brief under budget
+  echo "$output" | head -n 80
+}
+
 # ─── Queue management ───────────────────────────────────────
 
 init_queue() {
@@ -422,6 +439,20 @@ execute_task() {
     fi
   fi
 
+  # Generate project fingerprint (routes + schema) to seed Claude's context
+  local fingerprint
+  fingerprint="$(build_fingerprint "$repo_path")"
+  local fingerprint_section=""
+  if [[ -n "$fingerprint" ]]; then
+    fingerprint_section="$(cat <<FPRINT
+
+## Project Context (auto-generated)
+${fingerprint}
+FPRINT
+)"
+    log "│  Fingerprint: $(echo "$fingerprint" | grep -cE '^- ' || echo 0) items injected"
+  fi
+
   # Build mission prompt
   local mission_prompt
   mission_prompt="$(cat <<MISSION
@@ -432,6 +463,7 @@ Read files before modifying them. Be thorough.
 
 ## Task
 ${title}
+${fingerprint_section}
 
 ## Instructions
 ${prompt}

@@ -4,6 +4,11 @@ All notable changes to cc-taskrunner will be documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.4.0] — 2026-04-09
+
+### Added
+- **Project fingerprint injection** — Mission briefs now include a `## Project Context (auto-generated)` section when `charter surface --markdown` is available on PATH. Gives Claude Code an immediate map of routes + schema tables so it doesn't burn turns exploring the codebase. Degrades gracefully if charter is not installed. Opt out via `CC_DISABLE_FINGERPRINT=1`. Output capped at 80 lines to protect the prompt budget.
+
 ## [1.3.0] — 2026-03-29
 
 ### Fixed
