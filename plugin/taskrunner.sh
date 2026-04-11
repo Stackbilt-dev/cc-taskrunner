@@ -143,6 +143,77 @@ print("\n".join(lines))
 '
 }
 
+# ─── Ratchet mode (#16) ─────────────────────────────────────
+# Measure-before-after validation. See taskrunner.sh for the full doc —
+# this is the parallel plugin copy. Keep them in sync.
+
+ratchet_enabled_for_task() {
+  local task_json="$1"
+  if [[ "${CC_DISABLE_RATCHET:-0}" = "1" ]]; then return 1; fi
+  if [[ "${CC_RATCHET:-}" = "0" ]]; then return 1; fi
+  if [[ "${CC_RATCHET:-}" = "1" ]]; then return 0; fi
+  local explicit category
+  explicit=$(echo "$task_json" | python3 -c 'import json,sys; v=json.load(sys.stdin).get("ratchet"); print("" if v is None else str(v).lower())' 2>/dev/null)
+  category=$(echo "$task_json" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("category", ""))' 2>/dev/null)
+  if [[ "$explicit" = "true" ]]; then return 0; fi
+  if [[ "$explicit" = "false" ]]; then return 1; fi
+  case "$category" in
+    refactor|bugfix) return 0 ;;
+    docs|tests|research|deploy) return 1 ;;
+    *) return 1 ;;
+  esac
+}
+
+ratchet_snapshot() {
+  local repo_path="$1" label="$2"
+  local timeout_secs="${CC_RATCHET_TIMEOUT:-180}"
+  local tc_status="skip" test_status="skip"
+  if [[ -f "${repo_path}/package.json" ]] && command -v python3 >/dev/null 2>&1; then
+    local has_typecheck has_test
+    has_typecheck=$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print("1" if "typecheck" in d.get("scripts", {}) else "0")' "${repo_path}/package.json" 2>/dev/null || echo 0)
+    has_test=$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print("1" if "test" in d.get("scripts", {}) else "0")' "${repo_path}/package.json" 2>/dev/null || echo 0)
+    if [[ "$has_typecheck" = "1" ]]; then
+      if ( cd "$repo_path" && timeout "$timeout_secs" npm run typecheck >/dev/null 2>&1 ); then
+        tc_status="pass"
+      else
+        tc_status="fail"
+      fi
+    fi
+    if [[ "$has_test" = "1" ]]; then
+      if ( cd "$repo_path" && timeout "$timeout_secs" npm test >/dev/null 2>&1 ); then
+        test_status="pass"
+      else
+        test_status="fail"
+      fi
+    fi
+  fi
+  printf '{"label":"%s","typecheck":"%s","test":"%s"}' "$label" "$tc_status" "$test_status"
+}
+
+ratchet_decision() {
+  local baseline="$1" post="$2"
+  local bt pt bx px
+  bt=$(echo "$baseline" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("typecheck","skip"))' 2>/dev/null || echo skip)
+  pt=$(echo "$post"     | python3 -c 'import json,sys; print(json.load(sys.stdin).get("typecheck","skip"))' 2>/dev/null || echo skip)
+  bx=$(echo "$baseline" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("test","skip"))'      2>/dev/null || echo skip)
+  px=$(echo "$post"     | python3 -c 'import json,sys; print(json.load(sys.stdin).get("test","skip"))'      2>/dev/null || echo skip)
+  local reverts=()
+  if [[ "$bt" = "pass" && "$pt" = "fail" ]]; then
+    reverts+=("typecheck regression (pass → fail)")
+  fi
+  if [[ "$bx" = "pass" && "$px" = "fail" ]]; then
+    reverts+=("test regression (pass → fail)")
+  fi
+  if [[ ${#reverts[@]} -gt 0 ]]; then
+    local reason
+    reason=$(IFS=', '; echo "${reverts[*]}")
+    echo "revert: $reason"
+    return 1
+  fi
+  echo "keep: baseline=tc:${bt},test:${bx} post=tc:${pt},test:${px}"
+  return 0
+}
+
 # ─── Queue management ───────────────────────────────────────
 
 init_queue() {
@@ -375,6 +446,10 @@ execute_task() {
   local branch=""
   local use_branch=false
   local stashed=false
+  # Ratchet state — initialized up front so the post-validation block
+  # can reference them on paths that skip branch creation entirely.
+  local RATCHET_ENABLED=false
+  local RATCHET_BASELINE=""
   cd "$repo_path"
 
   # Non-operator tasks get their own branch
@@ -406,6 +481,14 @@ execute_task() {
     # Start from main
     git checkout main 2>/dev/null || git checkout master 2>/dev/null
     git pull --ff-only 2>/dev/null || true
+
+    # ── Ratchet baseline capture (#16) ────────────────────────
+    if ratchet_enabled_for_task "$task_json"; then
+      RATCHET_ENABLED=true
+      log "│  Ratchet: capturing baseline on main…"
+      RATCHET_BASELINE="$(ratchet_snapshot "$repo_path" baseline)"
+      log "│  Ratchet baseline: ${RATCHET_BASELINE}"
+    fi
 
     # Create or reset task branch
     if git rev-parse --verify "$branch" >/dev/null 2>&1; then
@@ -541,6 +624,36 @@ except:
 
 Task: ${title}" 2>/dev/null || true
       commit_count=$((commit_count + 1))
+    fi
+
+    # ── Ratchet post-validation (#16) ─────────────────────────
+    local ratchet_verdict=""
+    if [[ "$RATCHET_ENABLED" = "true" && "$commit_count" -gt 0 ]]; then
+      log "│  Ratchet: validating branch…"
+      local ratchet_post
+      ratchet_post="$(ratchet_snapshot "$repo_path" post)"
+      log "│  Ratchet post:     ${ratchet_post}"
+      ratchet_verdict="$(ratchet_decision "$RATCHET_BASELINE" "$ratchet_post")"
+      local ratchet_rc=$?
+      log "│  Ratchet verdict:  ${ratchet_verdict}"
+
+      if [[ $ratchet_rc -ne 0 ]]; then
+        log "│  Ratchet REVERT — dropping branch and skipping PR"
+        git checkout main 2>/dev/null || git checkout master 2>/dev/null
+        git branch -D "$branch" 2>/dev/null || true
+        branch=""
+        commit_count=0
+        if [[ "$stashed" == "true" ]]; then
+          git stash pop 2>/dev/null && log "│  Restored stashed changes" || true
+          stashed=false
+        fi
+        result_text="[ratchet_revert] ${ratchet_verdict}
+
+${result_text}"
+        update_task_status "$task_id" "failed" "ratchet revert: ${ratchet_verdict}"
+        log "└─ Task reverted by ratchet gate"
+        return 1
+      fi
     fi
 
     # Push and create PR if there are commits
