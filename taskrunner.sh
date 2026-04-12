@@ -699,16 +699,20 @@ execute_task() {
     git checkout -b "$branch"
     log "│  Branch: ${branch}"
 
-    # Seed .gitignore to block Windows-path directories that agents sometimes
-    # create (e.g. C:\Users\...) which cause git ls-files to hang scanning
-    # deeply nested untracked trees like pnpm stores. Fixes #6.
-    if ! grep -q '^C:\*' .gitignore 2>/dev/null; then
+    # Seed .git/info/exclude to block Windows-path directories that agents
+    # sometimes create (e.g. C:\Users\...) which cause git ls-files to hang
+    # scanning deeply nested untracked trees like pnpm stores. Fixes #6.
+    # Uses .git/info/exclude (never committed) instead of .gitignore to
+    # avoid contaminating auto-generated PRs. Fixes #25.
+    local exclude_file
+    exclude_file="$(git rev-parse --git-dir)/info/exclude"
+    mkdir -p "$(dirname "$exclude_file")"
+    if ! grep -q '^C:\*' "$exclude_file" 2>/dev/null; then
       {
         echo ""
         echo "# cc-taskrunner: block Windows-path pollution"
         echo "C:*"
-      } >> .gitignore
-      git add .gitignore 2>/dev/null || true
+      } >> "$exclude_file"
     fi
   fi
 
