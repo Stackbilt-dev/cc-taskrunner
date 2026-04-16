@@ -4,6 +4,11 @@ All notable changes to cc-taskrunner will be documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+### Added
+- **README: Claude Code Routines vs cc-taskrunner comparison section.** Anthropic shipped Claude Code Routines (research preview) in April 2026 — saved Claude Code configurations that run on Anthropic's cloud on a schedule, via API trigger, or on GitHub events. Added a new section between "Why This Exists" and "Quick Start" with: a 12-row capability comparison table, explicit "when cc-taskrunner is right" / "when Routines are right" decision rubrics, and an honest disclosure that Stackbilt itself currently runs the taskrunner in paused mode and uses Routines for several scheduled workloads. Framing: complementary, not competitive — pick the substrate that fits the work.
+
 ## [1.6.0] — 2026-04-11
 
 ### Added
