@@ -4,6 +4,29 @@ All notable changes to cc-taskrunner will be documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+### Added
+- **README: Claude Code Routines vs cc-taskrunner comparison section.** Anthropic shipped Claude Code Routines (research preview) in April 2026 — saved Claude Code configurations that run on Anthropic's cloud on a schedule, via API trigger, or on GitHub events. Added a new section between "Why This Exists" and "Quick Start" with: a 12-row capability comparison table, explicit "when cc-taskrunner is right" / "when Routines are right" decision rubrics, and an honest disclosure that Stackbilt itself currently runs the taskrunner in paused mode and uses Routines for several scheduled workloads. Framing: complementary, not competitive — pick the substrate that fits the work.
+
+## [1.6.0] — 2026-04-11
+
+### Added
+- **Ratchet mode — measure-before-after validation for autonomous improvements** (#16). The runner now captures a baseline snapshot of `npm run typecheck` + `npm test` pass/fail on `main` before creating the task branch, re-runs the same checks on the branch after the task commits, and automatically reverts the task (delete branch, skip push/PR, mark failed) when a check transitioned `pass → fail`. Gates regressions from reaching origin.
+
+  **Opt-in paths:**
+  - `"ratchet": true` in the task JSON (explicit per-task)
+  - Category defaults: `refactor` and `bugfix` ratchet automatically
+  - `CC_RATCHET=1` environment override (force-enable every task)
+
+  **Never ratcheted:** `docs`, `tests`, `research`, `deploy` — no regression surface or outcomes aren't code-level.
+
+  **Decision rule:** only `pass → fail` transitions revert. `fail → fail` (unchanged broken surface) and `skip → fail` (first-time check on pre-existing breakage) are both `keep`. `fail → pass` is `keep` (improvement).
+
+  **Env knobs:** `CC_RATCHET=1|0`, `CC_RATCHET_TIMEOUT=<seconds>` (default 180), `CC_DISABLE_RATCHET=1` (legacy alias).
+
+  Applied symmetrically to `taskrunner.sh` and `plugin/taskrunner.sh`. Pure bash + python3 — zero new dependencies. Degrades to no-op when the repo has no `typecheck` or `test` script. Only runs on branch-isolated tasks (operator-authority tasks skip ratchet entirely).
+
 ## [1.5.0] — 2026-04-09
 
 ### Added

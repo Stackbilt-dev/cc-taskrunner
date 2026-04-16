@@ -196,6 +196,126 @@ print("\n".join(lines))
 '
 }
 
+# ─── Ratchet mode (#16) ─────────────────────────────────────
+# Measure-before-after validation for autonomous improvements.
+# Captures baseline metrics on main BEFORE the branch exists, re-runs the
+# same checks on the branch AFTER the task commits, and reverts the task
+# (deletes branch, skips push/PR) if metrics regressed.
+#
+# Opt-in paths:
+#   1. Explicit per-task field: `"ratchet": true` in the task JSON
+#   2. Category default: `refactor` and `bugfix` tasks ratchet automatically
+#   3. Environment override: `CC_RATCHET=1` enables for every task
+#      (override with `CC_RATCHET=0`)
+#
+# Categories NEVER ratcheted (signal noise > signal value):
+#   - docs, tests — no regression surface
+#   - research, deploy — outcomes aren't code-level
+#
+# Checks captured in the snapshot (each is independent and degrades to
+# `skip` when not applicable to the target repo):
+#   - typecheck:  `npm run typecheck` exit code
+#   - tests:      `npm test` exit code
+#
+# Regression rule: if a check transitioned from `pass` → `fail`, the
+# branch is reverted. `skip → fail` is NOT a regression (first time the
+# check ran, pre-existing breakage). `fail → fail` is NOT a regression
+# either — the task wasn't expected to fix that surface.
+#
+# Environment knobs:
+#   CC_RATCHET=1|0                — force-enable or force-disable (overrides task fields)
+#   CC_RATCHET_TIMEOUT=<seconds>  — per-check timeout (default: 180)
+#   CC_DISABLE_RATCHET=1          — legacy alias for CC_RATCHET=0
+
+ratchet_enabled_for_task() {
+  local task_json="$1"
+
+  # Environment force-overrides win
+  if [[ "${CC_DISABLE_RATCHET:-0}" = "1" ]]; then return 1; fi
+  if [[ "${CC_RATCHET:-}" = "0" ]]; then return 1; fi
+  if [[ "${CC_RATCHET:-}" = "1" ]]; then return 0; fi
+
+  local explicit category
+  explicit=$(echo "$task_json" | python3 -c 'import json,sys; v=json.load(sys.stdin).get("ratchet"); print("" if v is None else str(v).lower())' 2>/dev/null)
+  category=$(echo "$task_json" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("category", ""))' 2>/dev/null)
+
+  # Explicit per-task flag wins over category defaults
+  if [[ "$explicit" = "true" ]]; then return 0; fi
+  if [[ "$explicit" = "false" ]]; then return 1; fi
+
+  case "$category" in
+    refactor|bugfix) return 0 ;;
+    docs|tests|research|deploy) return 1 ;;
+    *) return 1 ;;
+  esac
+}
+
+# ratchet_snapshot <repo_path> <label>
+# Emits a single-line JSON snapshot with the check results. Safe to call
+# on any working tree (main or branch). Uses a per-check timeout so a
+# runaway test suite can't stall the runner.
+ratchet_snapshot() {
+  local repo_path="$1" label="$2"
+  local timeout_secs="${CC_RATCHET_TIMEOUT:-180}"
+  local tc_status="skip" test_status="skip"
+
+  if [[ -f "${repo_path}/package.json" ]] && command -v python3 >/dev/null 2>&1; then
+    # Detect npm scripts without introducing a jq dependency
+    local has_typecheck has_test
+    has_typecheck=$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print("1" if "typecheck" in d.get("scripts", {}) else "0")' "${repo_path}/package.json" 2>/dev/null || echo 0)
+    has_test=$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print("1" if "test" in d.get("scripts", {}) else "0")' "${repo_path}/package.json" 2>/dev/null || echo 0)
+
+    if [[ "$has_typecheck" = "1" ]]; then
+      if ( cd "$repo_path" && timeout "$timeout_secs" npm run typecheck >/dev/null 2>&1 ); then
+        tc_status="pass"
+      else
+        tc_status="fail"
+      fi
+    fi
+
+    if [[ "$has_test" = "1" ]]; then
+      if ( cd "$repo_path" && timeout "$timeout_secs" npm test >/dev/null 2>&1 ); then
+        test_status="pass"
+      else
+        test_status="fail"
+      fi
+    fi
+  fi
+
+  printf '{"label":"%s","typecheck":"%s","test":"%s"}' "$label" "$tc_status" "$test_status"
+}
+
+# ratchet_decision <baseline_json> <post_json>
+# Prints a verdict line and returns 0=keep, 1=revert.
+ratchet_decision() {
+  local baseline="$1" post="$2"
+
+  local bt pt bx px
+  bt=$(echo "$baseline" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("typecheck","skip"))' 2>/dev/null || echo skip)
+  pt=$(echo "$post"     | python3 -c 'import json,sys; print(json.load(sys.stdin).get("typecheck","skip"))' 2>/dev/null || echo skip)
+  bx=$(echo "$baseline" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("test","skip"))'      2>/dev/null || echo skip)
+  px=$(echo "$post"     | python3 -c 'import json,sys; print(json.load(sys.stdin).get("test","skip"))'      2>/dev/null || echo skip)
+
+  local reverts=()
+
+  if [[ "$bt" = "pass" && "$pt" = "fail" ]]; then
+    reverts+=("typecheck regression (pass → fail)")
+  fi
+  if [[ "$bx" = "pass" && "$px" = "fail" ]]; then
+    reverts+=("test regression (pass → fail)")
+  fi
+
+  if [[ ${#reverts[@]} -gt 0 ]]; then
+    local reason
+    reason=$(IFS=', '; echo "${reverts[*]}")
+    echo "revert: $reason"
+    return 1
+  fi
+
+  echo "keep: baseline=tc:${bt},test:${bx} post=tc:${pt},test:${px}"
+  return 0
+}
+
 # ─── Queue management ───────────────────────────────────────
 
 init_queue() {
@@ -492,6 +612,11 @@ execute_task() {
   local branch=""
   local use_branch=false
   local stashed=false
+  # Ratchet state — initialized up front so post-validation block
+  # can reference them even on the operator-authority path that
+  # skips branch creation entirely (ratchet is branch-only).
+  local RATCHET_ENABLED=false
+  local RATCHET_BASELINE=""
   cd "$repo_path"
 
   # Non-operator tasks get their own branch
@@ -532,6 +657,17 @@ execute_task() {
     git checkout main 2>/dev/null || git checkout master 2>/dev/null
     git pull --ff-only 2>/dev/null || true
 
+    # ── Ratchet baseline capture (#16) ────────────────────────
+    # Snapshot the pass/fail state of typecheck + tests on main BEFORE
+    # the branch exists. We compare the post-task snapshot against this
+    # to decide keep-vs-revert after the task runs.
+    if ratchet_enabled_for_task "$task_json"; then
+      RATCHET_ENABLED=true
+      log "│  Ratchet: capturing baseline on main…"
+      RATCHET_BASELINE="$(ratchet_snapshot "$repo_path" baseline)"
+      log "│  Ratchet baseline: ${RATCHET_BASELINE}"
+    fi
+
     # Check both local AND remote refs for existing branch (#14)
     # Prior bug: only checked local refs, missed remote-only branches left by
     # worktree cleanup. Those stale remote branches caused push failures.
@@ -563,16 +699,20 @@ execute_task() {
     git checkout -b "$branch"
     log "│  Branch: ${branch}"
 
-    # Seed .gitignore to block Windows-path directories that agents sometimes
-    # create (e.g. C:\Users\...) which cause git ls-files to hang scanning
-    # deeply nested untracked trees like pnpm stores. Fixes #6.
-    if ! grep -q '^C:\*' .gitignore 2>/dev/null; then
+    # Seed .git/info/exclude to block Windows-path directories that agents
+    # sometimes create (e.g. C:\Users\...) which cause git ls-files to hang
+    # scanning deeply nested untracked trees like pnpm stores. Fixes #6.
+    # Uses .git/info/exclude (never committed) instead of .gitignore to
+    # avoid contaminating auto-generated PRs. Fixes #25.
+    local exclude_file
+    exclude_file="$(git rev-parse --git-dir)/info/exclude"
+    mkdir -p "$(dirname "$exclude_file")"
+    if ! grep -q '^C:\*' "$exclude_file" 2>/dev/null; then
       {
         echo ""
         echo "# cc-taskrunner: block Windows-path pollution"
         echo "C:*"
-      } >> .gitignore
-      git add .gitignore 2>/dev/null || true
+      } >> "$exclude_file"
     fi
   fi
 
@@ -745,6 +885,41 @@ except:
 
 Task: ${title}" 2>/dev/null || true
       commit_count=$((commit_count + 1))
+    fi
+
+    # ── Ratchet post-validation (#16) ─────────────────────────
+    # Re-run the baseline checks on the branch. If a check transitioned
+    # pass→fail, revert the branch — delete it locally, skip push/PR,
+    # mark the task failed with a ratchet-revert reason. We do this
+    # BEFORE push so a regressed branch never reaches origin or opens
+    # a PR the operator then has to close.
+    local ratchet_verdict=""
+    if [[ "$RATCHET_ENABLED" = "true" && "$commit_count" -gt 0 ]]; then
+      log "│  Ratchet: validating branch…"
+      local ratchet_post
+      ratchet_post="$(ratchet_snapshot "$repo_path" post)"
+      log "│  Ratchet post:     ${ratchet_post}"
+      ratchet_verdict="$(ratchet_decision "$RATCHET_BASELINE" "$ratchet_post")"
+      local ratchet_rc=$?
+      log "│  Ratchet verdict:  ${ratchet_verdict}"
+
+      if [[ $ratchet_rc -ne 0 ]]; then
+        log "│  Ratchet REVERT — dropping branch and skipping PR"
+        git checkout main 2>/dev/null || git checkout master 2>/dev/null
+        git branch -D "$branch" 2>/dev/null || true
+        branch=""
+        commit_count=0
+        if [[ "$stashed" == "true" ]]; then
+          git stash pop 2>/dev/null && log "│  Restored stashed changes" || true
+          stashed=false
+        fi
+        result_text="[ratchet_revert] ${ratchet_verdict}
+
+${result_text}"
+        update_task_status "$task_id" "failed" "ratchet revert: ${ratchet_verdict}"
+        log "└─ Task reverted by ratchet gate"
+        return 1
+      fi
     fi
 
     # Push and create PR if there are commits

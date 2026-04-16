@@ -37,6 +37,47 @@ Claude Code is powerful in interactive sessions. But there's no built-in way to:
 
 cc-taskrunner fills that gap. It's the execution layer between "Claude can write code" and "Claude can ship code safely."
 
+## cc-taskrunner vs. Claude Code Routines
+
+In April 2026 Anthropic shipped [Claude Code Routines](https://code.claude.com/docs/en/routines) (research preview) — saved Claude Code configurations that run on Anthropic's cloud infrastructure on a schedule, via API trigger, or on GitHub events. **Routines and cc-taskrunner solve overlapping problems differently.** Both have a place; pick the substrate that fits the work.
+
+|  | cc-taskrunner | Claude Code Routines |
+|---|---|---|
+| **Where it runs** | Your machine (or any box with bash + `claude` CLI) | Anthropic-managed cloud |
+| **Cost model** | Your local resources + your Claude subscription | Subscription quota only |
+| **Trigger** | Manual / loop mode (1-minute polling) | Schedule (1h cron min), API endpoint, or GitHub event |
+| **Cadence floor** | Sub-minute possible | 1 hour minimum on schedule triggers |
+| **Local filesystem access** | ✅ Full — operate on any directory | ❌ Cloned-repo only, fresh clone per fire |
+| **Runs while laptop is closed** | ❌ Needs your machine running | ✅ Cloud-managed |
+| **Queue management** | ✅ JSON file, dependencies, FIFO | ❌ One prompt per routine; multiple triggers per routine |
+| **Branch isolation** | ✅ `auto/{task-id}` per task | ✅ `claude/*`-prefixed branches enforced by default |
+| **Pre-flight safety hooks** | ✅ Bash hooks block destructive ops | ⚠️ Permission-mode-less by design (autonomous) |
+| **Blast radius gate** | ✅ via `charter blast` integration | Not built-in |
+| **GitHub event triggers** | ❌ Not designed for it | ✅ `pull_request` and `release` events |
+| **Setup overhead** | bash + python3 + `gh` CLI + clone | claude.ai account with web/Pro/Max plan |
+
+### When cc-taskrunner is the right substrate
+
+- You want to queue a backlog of tasks and run them unattended — taskrunner is built for this; routines are not (one prompt per routine)
+- You need work to happen against your **local filesystem** (paths outside any GitHub repo, machine-specific tooling, in-progress work in your worktree)
+- You need **sub-hour cadence** or want to run a continuous polling loop
+- You want to enforce blast-radius limits via [`@stackbilt/cli`](https://github.com/Stackbilt-dev/charter)'s `charter blast` before any change touches code
+- You want **bash-hook safety enforcement** that blocks destructive operations at the OS level rather than relying on prompt discipline alone
+
+### When Claude Code Routines are the right substrate
+
+- The work is a single repeatable task that fires on a schedule, on a GitHub event, or on demand via API call
+- You want it to run while your machine is off (overnight, weekends, while traveling)
+- You want **GitHub-event-driven** automation (PR review on every `pull_request.opened`, port-on-merge between SDKs, etc.)
+- The work needs to write back via MCP connectors (Slack, Linear, custom MCP servers) without local credentials
+- You don't need queue management — one prompt + one schedule + one trigger is enough
+
+### Honest disclosure
+
+Stackbilt (the project that originated cc-taskrunner) currently runs taskrunner in **paused** mode and uses Routines for several scheduled workloads. That's not because the taskrunner is broken — it's because the workloads in question (autonomous heartbeat triage, weekly cross-repo pattern scans) fit the routine substrate better. Routines and the taskrunner are **complementary** in a real ecosystem; we don't claim one obsoletes the other.
+
+If you're starting fresh and your work fits the schedule/event/API-trigger model, try Routines first — there's nothing to install. If you need queue management, sub-hour polling, local filesystem access, or hook-level safety enforcement, taskrunner remains the right tool.
+
 ## Quick Start
 
 ```bash
