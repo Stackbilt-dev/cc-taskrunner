@@ -44,7 +44,7 @@ In April 2026 Anthropic shipped [Claude Code Routines](https://code.claude.com/d
 |  | cc-taskrunner | Claude Code Routines |
 |---|---|---|
 | **Where it runs** | Your machine (or any box with bash + `claude` CLI) | Anthropic-managed cloud |
-| **Cost model** | Your local resources + your Claude subscription | Subscription quota only |
+| **Cost model** | Your local resources; `claude -p` calls may draw from the monthly Agent SDK credit (subscription-authenticated users) or pay-as-you-go (API-key users) | Agent SDK monthly credit (subscription-authenticated users) |
 | **Trigger** | Manual / loop mode (1-minute polling) | Schedule (1h cron min), API endpoint, or GitHub event |
 | **Cadence floor** | Sub-minute possible | 1 hour minimum on schedule triggers |
 | **Local filesystem access** | ✅ Full — operate on any directory | ❌ Cloned-repo only, fresh clone per fire |
@@ -77,6 +77,57 @@ In April 2026 Anthropic shipped [Claude Code Routines](https://code.claude.com/d
 Stackbilt (the project that originated cc-taskrunner) currently runs taskrunner in **paused** mode and uses Routines for several scheduled workloads. That's not because the taskrunner is broken — it's because the workloads in question (autonomous heartbeat triage, weekly cross-repo pattern scans) fit the routine substrate better. Routines and the taskrunner are **complementary** in a real ecosystem; we don't claim one obsoletes the other.
 
 If you're starting fresh and your work fits the schedule/event/API-trigger model, try Routines first — there's nothing to install. If you need queue management, sub-hour polling, local filesystem access, or hook-level safety enforcement, taskrunner remains the right tool.
+
+## Claude Agent SDK Credit Compatibility
+
+Starting June 15, 2026, eligible Claude plan users can claim a separate monthly Agent SDK credit. Because cc-taskrunner executes tasks through `claude -p`, queued taskrunner usage **may draw from that Agent SDK credit** when Claude Code is authenticated through a Claude subscription plan (Pro, Max, Team, or Enterprise). Developer Platform API-key usage is not covered by this credit and remains pay-as-you-go.
+
+**What the Agent SDK credit covers:**
+- `claude -p` invocations — what cc-taskrunner uses for every task
+- Claude Code GitHub Actions integration
+- Third-party apps built on the Agent SDK
+
+**What the credit does not cover:**
+- Interactive Claude Code sessions
+- Claude web, desktop, and mobile conversations
+- Developer Platform API-key usage
+
+**Credit behavior:**
+- Credits are per-user, refresh monthly, do not roll over, and cannot be pooled across teams
+- After credit exhaustion, usage continues only if extra usage billing is enabled; otherwise requests will stop until the credit refreshes
+
+> **Note:** Eligibility details and credit amounts may change. Consult Anthropic's pricing page for current terms.
+
+### Budget discipline
+
+Queued automation can consume credit quickly if a large backlog runs unattended. Recommended starting point:
+
+```bash
+./taskrunner.sh --max 1 --turns 10
+```
+
+**Practical tips:**
+
+- Keep task prompts specific — reference exact file paths rather than vague descriptions
+- Use bounded turn counts: `--turns 10`–`15` for small tasks, `--turns 20` for medium
+- Preview before running: `./taskrunner.sh --dry-run`
+- Run a small batch first, review results, then continue with more tasks
+
+> **Note on `--turns` and queued tasks:** The `--turns` flag (and `CC_MAX_TURNS`) sets the default for tasks *added* in the current session. Tasks already saved in `queue.json` run with the `max_turns` value stored at add time. To cap turns on an existing backlog, edit `queue.json` directly and update the `max_turns` field on the relevant tasks.
+
+For batch runs, set `CC_BUDGET_PROFILE` to apply a preset configuration:
+
+| Profile | Max tasks/run | Default turns | Use for |
+|---------|--------------|---------------|---------|
+| `conservative` | 3 | 10 | Cautious first runs, limited credit budget |
+| `normal` | 5 | 20 | Standard usage |
+| `aggressive` | unlimited | 25 | Existing default behavior |
+
+```bash
+CC_BUDGET_PROFILE=conservative ./taskrunner.sh
+```
+
+Explicit `--max`, `--turns`, `CC_MAX_TASKS`, and `CC_MAX_TURNS` always override profile defaults.
 
 ## Quick Start
 
@@ -185,6 +236,7 @@ If a blocker fails, all tasks that depend on it are automatically cancelled.
 | `CC_BLAST_WARN` | `20` | Blast radius threshold for `high` severity (warning injected into mission brief) |
 | `CC_BLAST_BLOCK` | `50` | Blast radius threshold for `critical` severity (auto_safe execution refused) |
 | `CC_BLAST_TIMEOUT` | `60` | Timeout in seconds for `charter blast` (per task) |
+| `CC_BUDGET_PROFILE` | *(unset)* | Preset credit budget configuration: `conservative` (max 3 tasks, 10 turns), `normal` (max 5 tasks, 20 turns), `aggressive` (existing defaults). Overridden by explicit `--max`, `--turns`, `CC_MAX_TASKS`, or `CC_MAX_TURNS`. |
 
 ## Charter Integration (optional)
 

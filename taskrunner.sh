@@ -28,8 +28,8 @@ QUEUE_FILE="${CC_QUEUE_FILE:-${SCRIPT_DIR}/queue.json}"
 HOOKS_DIR="${SCRIPT_DIR}/hooks"
 HOOKS_SETTINGS="${HOOKS_DIR}/settings.json"
 POLL_INTERVAL="${CC_POLL_INTERVAL:-60}"
-MAX_TASKS="${CC_MAX_TASKS:-0}"  # 0 = unlimited
-MAX_TURNS="${CC_MAX_TURNS:-25}"
+MAX_TASKS="${CC_MAX_TASKS:-}"   # empty until resolved below
+MAX_TURNS="${CC_MAX_TURNS:-}"   # empty until resolved below
 REPOS_DIR="${CC_REPOS_DIR:-}"  # Base directory for repo lookups
 DRY_RUN=false
 LOOP_MODE=false
@@ -59,6 +59,24 @@ while [[ $# -gt 0 ]]; do
     *)         echo "Unknown arg: $1" >&2; exit 1 ;;
   esac
 done
+
+# ─── CC_BUDGET_PROFILE ────────────────────────────────────────
+# Applies preset defaults for MAX_TASKS and MAX_TURNS only when
+# those values were not already set by CLI flags or env vars.
+# Explicit --max, --turns, CC_MAX_TASKS, CC_MAX_TURNS always win.
+case "${CC_BUDGET_PROFILE:-}" in
+  conservative) [[ -z "$MAX_TASKS" ]] && MAX_TASKS=3
+                [[ -z "$MAX_TURNS" ]] && MAX_TURNS=10 ;;
+  normal)       [[ -z "$MAX_TASKS" ]] && MAX_TASKS=5
+                [[ -z "$MAX_TURNS" ]] && MAX_TURNS=20 ;;
+  aggressive)   ;;  # preserve existing defaults (applied below)
+  "")           ;;
+  *)            echo "WARNING: unknown CC_BUDGET_PROFILE '${CC_BUDGET_PROFILE}' — ignoring" >&2 ;;
+esac
+
+# Apply system defaults for anything still unset
+MAX_TASKS="${MAX_TASKS:-0}"   # 0 = unlimited
+MAX_TURNS="${MAX_TURNS:-25}"
 
 # ─── Helpers ─────────────────────────────────────────────────
 
