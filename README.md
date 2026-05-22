@@ -284,6 +284,41 @@ When `charter blast --format json` is available, the runner extracts file paths 
 
 **Requires:** `@stackbilt/cli >= 0.10.0` on `PATH`. Install with `npm install -g @stackbilt/cli`.
 
+## CodeBeast Integration (D1 Bridge)
+
+cc-taskrunner is the execution backend for CodeBeast's QUEUED-tier autonomous fix pipeline. When CodeBeast classifies a GitHub issue as `MULTI_FILE` complexity, it writes a fix job to its D1 `fix_queue` table and posts an **AWAITING APPROVAL** comment on the issue with a Fix ID.
+
+Once a human approves, cc-taskrunner picks up the job via the D1 bridge (see issue #28).
+
+**D1 bridge status**: planned — not yet built. Track at [Stackbilt-dev/cc-taskrunner#28](https://github.com/Stackbilt-dev/cc-taskrunner/issues/28).
+
+**Manual workflow (current)**:
+1. CodeBeast posts "AWAITING APPROVAL" comment with Fix ID on the GitHub issue
+2. Human reviews the analysis (affected files, governance tier, reasoning)
+3. Human manually adds the task to `queue.json` using the Fix ID and prompt from the comment
+4. cc-taskrunner executes on next loop iteration
+
+**Fix job schema from D1**:
+| Field | queue.json mapping |
+|---|---|
+| `id` | `id` |
+| `title` | `title` |
+| `prompt` | `prompt` |
+| `authority` | `authority` (`auto_safe` or `operator`) |
+| `max_turns` | `max_turns` (default 20) |
+| `repo` | `repo` |
+| `origin_branch` | branch base for `fix/codebeast-{id[:8]}` |
+
+## Alternative Execution Backends
+
+cc-taskrunner uses the `claude` CLI (`claude -p`) for all task execution. Two Stackbilt alternatives are in development:
+
+**llm-gateway** ([Stackbilt-dev/llm-gateway](https://github.com/Stackbilt-dev/llm-gateway)) — local proxy that sits between `claude -p` and upstream providers. Routes by cognitive load: planning/code turns → Groq, tool_loop turns → Anthropic. Zero changes to cc-taskrunner required — just set `ANTHROPIC_BASE_URL` to the gateway. Run shadow mode first to see projected savings per session.
+
+**llm-providers** ([Stackbilt-dev/llm-providers](https://github.com/Stackbilt-dev/llm-providers)) — Workers-native direct API abstraction. A future re-architecture path that would remove the `claude` CLI dependency entirely. More control, more work. Appropriate if cc-taskrunner needs to run in a Workers/edge environment without a local machine.
+
+Note: Anthropic policy change (2026-04-05) bills programmatic `claude -p` use at API rates rather than subscription rates. Budget accordingly or use llm-gateway to reduce Anthropic turn count.
+
 ## Safety Architecture
 
 Three layers of protection. All three must be bypassed for something bad to happen.
