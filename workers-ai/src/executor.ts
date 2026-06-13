@@ -36,8 +36,10 @@ export async function executeTask(
 
   const text = response.message ?? '';
   const completionSignal = task.completion_signal ?? 'TASK_COMPLETE';
-  const completed = text.includes(completionSignal) || text.includes('TASK_COMPLETE');
-  const blocked = text.includes('TASK_BLOCKED');
+  // Check only the tail — prevents false positives when model documents the signals
+  const tail = text.slice(-200);
+  const completed = tail.includes(completionSignal) || tail.includes('TASK_COMPLETE');
+  const blocked = tail.includes('TASK_BLOCKED');
 
   return {
     text: text.slice(0, maxChars),
