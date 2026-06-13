@@ -1,5 +1,5 @@
 {
-  "name": "@cc-taskrunner/workers-ai",
+  "name": "@stackbilt/workers-ai-taskrunner",
   "version": "0.1.0",
   "description": "Cloudflare Workers AI native executor for cc-taskrunner task queues",
   "type": "module",
