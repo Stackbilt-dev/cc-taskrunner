@@ -84,10 +84,12 @@ log() { echo "[$(date '+%H:%M:%S')] $*"; }
 err() { echo "[$(date '+%H:%M:%S')] ERROR: $*" >&2; }
 
 # ─── Project fingerprint (optional) ──────────────────────────
-# Calls `charter surface --markdown` on the target repo to produce a
-# compact API-surface map (routes + schema). Injected into the mission
-# brief so Claude Code doesn't need to spend turns exploring the layout.
-# Gracefully degrades to empty output if charter is unavailable.
+# For Charter-governed repos (.charter/config.json present): calls
+# `charter context --stdout-only` to produce a pre-digested brief
+# (routes + hotspots + governance posture) that replaces 15-30 cold-boot
+# discovery calls from the spawned Claude Code session.
+# For non-governed repos: falls back to `charter surface --markdown`
+# (routes + schema only). Gracefully degrades if charter is unavailable.
 build_fingerprint() {
   local repo_path="$1"
   local disabled="${CC_DISABLE_FINGERPRINT:-0}"
@@ -95,10 +97,14 @@ build_fingerprint() {
   if ! command -v charter >/dev/null 2>&1; then return 0; fi
   local fp_timeout="${CC_FINGERPRINT_TIMEOUT:-60}"
   local output
-  output=$(timeout "$fp_timeout" charter surface --root "$repo_path" --markdown 2>/dev/null || true)
+  if [[ -f "${repo_path}/.charter/config.json" ]]; then
+    output=$(cd "$repo_path" && timeout "$fp_timeout" charter context --stdout-only 2>/dev/null || true)
+  fi
+  if [[ -z "$output" ]]; then
+    output=$(timeout "$fp_timeout" charter surface --root "$repo_path" --markdown 2>/dev/null || true)
+  fi
   if [[ -z "$output" ]]; then return 0; fi
-  # Cap at ~80 lines to keep mission brief under budget
-  echo "$output" | head -n 80
+  echo "$output"
 }
 
 # ─── Blast radius preflight (optional) ──────────────────────
