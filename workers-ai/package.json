@@ -18,11 +18,13 @@
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20250409.0",
+    "@stackbilt/llm-providers": "^1.16.0",
     "typescript": "^5.0.0",
     "vitest": "^2.0.0"
   },
   "peerDependencies": {
-    "@cloudflare/workers-types": ">=4"
+    "@cloudflare/workers-types": ">=4",
+    "@stackbilt/llm-providers": ">=1.16.0"
   },
   "license": "Apache-2.0"
 }
