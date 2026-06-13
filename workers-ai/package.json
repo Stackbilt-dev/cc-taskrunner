@@ -1,0 +1,28 @@
+{
+  "name": "@cc-taskrunner/workers-ai",
+  "version": "0.1.0",
+  "description": "Cloudflare Workers AI native executor for cc-taskrunner task queues",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250409.0",
+    "typescript": "^5.0.0",
+    "vitest": "^2.0.0"
+  },
+  "peerDependencies": {
+    "@cloudflare/workers-types": ">=4"
+  },
+  "license": "Apache-2.0"
+}
