@@ -712,8 +712,11 @@ execute_task() {
         log "│  Ratchet: feature branch '${feature_branch}' exists — suppressing auto-branch creation"
         branch="$feature_branch"
         feature_branch_mode=true
-        git checkout "$feature_branch" 2>/dev/null || \
-          git checkout -b "$feature_branch" "origin/${feature_branch}" 2>/dev/null
+        if ! git checkout "$feature_branch" 2>/dev/null && \
+           ! git checkout -b "$feature_branch" "origin/${feature_branch}" 2>/dev/null; then
+          log "│  ERROR: failed to checkout feature branch '${feature_branch}' — aborting task"
+          return 1
+        fi
         log "│  Branch: ${branch} (existing)"
       fi
     fi
