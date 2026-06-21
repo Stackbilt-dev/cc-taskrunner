@@ -30,9 +30,16 @@ function makeDb(tasks: CcTask[] = []) {
 
 // ─── Minimal Ai mock ─────────────────────────────────────────────────────────
 
-function makeAi(response: string) {
+function makeAi(response: string, options: { failModels?: string[] } = {}) {
+  const failModels = new Set(options.failModels ?? []);
   return {
-    run: vi.fn(async () => ({ response })),
+    run: vi.fn(async (model: string) => {
+      if (failModels.has(model)) {
+        failModels.delete(model);
+        throw new Error(`model unavailable: ${model}`);
+      }
+      return { response };
+    }),
   } as unknown as Ai;
 }
 
@@ -115,5 +122,28 @@ describe('createWorkersAiRunner', () => {
     });
     const result = await runner.run();
     expect(result.processed).toBeLessThanOrEqual(1);
+  });
+
+  it('falls back from GLM-5.2 to Llama 4 Scout when the primary model fails', async () => {
+    const task: CcTask = {
+      id: 'task-005',
+      title: 'Fallback task',
+      repo: 'test-repo',
+      prompt: 'Do something',
+      category: 'research',
+      completion_signal: null,
+    };
+    const ai = makeAi('Fallback result.\nTASK_COMPLETE', {
+      failModels: ['@cf/zai-org/glm-5.2'],
+    });
+    const db = makeDb([task]);
+    const runner = createWorkersAiRunner({ db, ai });
+    const result = await runner.run();
+
+    expect(result.completed).toBe(1);
+    expect((ai.run as unknown as ReturnType<typeof vi.fn>).mock.calls.map(call => call[0])).toEqual([
+      '@cf/zai-org/glm-5.2',
+      '@cf/meta/llama-4-scout-17b-16e-instruct',
+    ]);
   });
 });

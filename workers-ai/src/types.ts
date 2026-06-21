@@ -14,9 +14,9 @@ export interface RunnerConfig {
 }
 
 export interface RunnerOptions {
-  /** Primary model. Default: '@cf/meta/llama-4-scout-17b-16e-instruct' */
+  /** Primary model. Default: '@cf/zai-org/glm-5.2' */
   model?: string;
-  /** Fallback model if primary fails. Default: '@cf/meta/llama-3.1-70b-instruct' */
+  /** Fallback model if primary fails. Default: '@cf/meta/llama-4-scout-17b-16e-instruct' */
   fallbackModel?: string;
   /** Max tasks to claim and execute per run() call. Default: 3 */
   maxTasksPerRun?: number;

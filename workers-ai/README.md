@@ -8,7 +8,7 @@ Cloudflare Workers AI native executor for cc-taskrunner task queues. Claims and 
 npm install @stackbilt/workers-ai-taskrunner
 ```
 
-Peer dependencies: `@cloudflare/workers-types >=4`, `@stackbilt/llm-providers >=1.16.0`
+Peer dependencies: `@cloudflare/workers-types >=4`, `@stackbilt/llm-providers >=1.18.0`
 
 ## Quick Start
 
@@ -40,7 +40,8 @@ export default {
 
 | Field | Type | Default |
 |-------|------|---------|
-| `model` | `string` | `@cf/meta/llama-4-scout-17b-16e-instruct` |
+| `model` | `string` | `@cf/zai-org/glm-5.2` |
+| `fallbackModel` | `string` | `@cf/meta/llama-4-scout-17b-16e-instruct` |
 | `maxTasksPerRun` | `number` | `3` |
 | `maxResultChars` | `number` | `4000` |
 | `systemPrompt` | `string` | Built-in executor prompt |
@@ -93,7 +94,7 @@ Tasks flow: `pending` → `running` → `completed` | `failed`
 
 ## LLM Routing
 
-All inference goes through `@stackbilt/llm-providers` (`CloudflareProvider`) — no bolted-in `ai.run()` calls. This ensures consistent response normalization, usage tracking, and resiliency across the Stackbilt ecosystem.
+All inference goes through `@stackbilt/llm-providers` (`CloudflareProvider`) — no bolted-in `ai.run()` calls. The default primary model is Workers AI GLM-5.2 (`@cf/zai-org/glm-5.2`), with Llama 4 Scout as the built-in fallback. This ensures consistent response normalization, usage tracking, model catalog validation, and resiliency across the Stackbilt ecosystem.
 
 ## License
 

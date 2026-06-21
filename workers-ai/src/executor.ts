@@ -1,7 +1,9 @@
 import { CloudflareProvider } from '@stackbilt/llm-providers';
+import type { LLMRequest, LLMResponse } from '@stackbilt/llm-providers';
 import type { CcTask, RunnerOptions } from './types.js';
 
-const DEFAULT_MODEL = '@cf/meta/llama-4-scout-17b-16e-instruct';
+const DEFAULT_MODEL = '@cf/zai-org/glm-5.2';
+const DEFAULT_FALLBACK_MODEL = '@cf/meta/llama-4-scout-17b-16e-instruct';
 const DEFAULT_MAX_RESULT_CHARS = 4000;
 
 const DEFAULT_SYSTEM_PROMPT = `You are an autonomous task executor. Complete the assigned task precisely and thoroughly.
@@ -22,17 +24,31 @@ export async function executeTask(
   options: RunnerOptions = {},
 ): Promise<ExecutionResult> {
   const model = options.model ?? DEFAULT_MODEL;
+  const fallbackModel = options.fallbackModel ?? DEFAULT_FALLBACK_MODEL;
   const maxChars = options.maxResultChars ?? DEFAULT_MAX_RESULT_CHARS;
   const systemPrompt = options.systemPrompt ?? DEFAULT_SYSTEM_PROMPT;
 
   const provider = new CloudflareProvider({ ai });
 
-  const response = await provider.generateResponse({
+  const request: LLMRequest = {
     model,
     systemPrompt,
     messages: [{ role: 'user', content: task.prompt }],
     maxTokens: 4096,
-  });
+  };
+
+  let response: LLMResponse;
+  try {
+    response = await provider.generateResponse(request);
+  } catch (err) {
+    if (!fallbackModel || fallbackModel === model) {
+      throw err;
+    }
+    response = await provider.generateResponse({
+      ...request,
+      model: fallbackModel,
+    });
+  }
 
   const text = response.message ?? '';
   const completionSignal = task.completion_signal ?? 'TASK_COMPLETE';
