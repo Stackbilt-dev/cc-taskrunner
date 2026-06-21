@@ -220,21 +220,20 @@ print("\n".join(lines))
 '
 }
 
-# ─── Ratchet mode (#16) ─────────────────────────────────────
+# ─── Ratchet mode (#16, #26) ────────────────────────────────
 # Measure-before-after validation for autonomous improvements.
 # Captures baseline metrics on main BEFORE the branch exists, re-runs the
 # same checks on the branch AFTER the task commits, and reverts the task
 # (deletes branch, skips push/PR) if metrics regressed.
 #
-# Opt-in paths:
-#   1. Explicit per-task field: `"ratchet": true` in the task JSON
-#   2. Category default: `refactor` and `bugfix` tasks ratchet automatically
-#   3. Environment override: `CC_RATCHET=1` enables for every task
-#      (override with `CC_RATCHET=0`)
+# Ratchet is ACTIVE by default (opt-out). Disable with:
+#   1. Explicit per-task field: `"ratchet": false` in the task JSON
+#   2. Category default: `docs`, `tests`, `research`, `deploy` always skip
+#   3. Environment override: CC_RATCHET=0 or CC_DISABLE_RATCHET=1
 #
-# Categories NEVER ratcheted (signal noise > signal value):
-#   - docs, tests — no regression surface
-#   - research, deploy — outcomes aren't code-level
+# The ratchet also suppresses auto/{category}/{task-id} branch creation
+# when the task declares a `feature_branch` field pointing to an existing
+# branch — the task runs on that branch instead. See #26.
 #
 # Checks captured in the snapshot (each is independent and degrades to
 # `skip` when not applicable to the target repo):
@@ -267,10 +266,11 @@ ratchet_enabled_for_task() {
   if [[ "$explicit" = "true" ]]; then return 0; fi
   if [[ "$explicit" = "false" ]]; then return 1; fi
 
+  # Default: ratchet ON for all categories except signal-only ones.
+  # Opt out per-task with "ratchet": false or globally with CC_RATCHET=0.
   case "$category" in
-    refactor|bugfix) return 0 ;;
     docs|tests|research|deploy) return 1 ;;
-    *) return 1 ;;
+    *) return 0 ;;
   esac
 }
 
@@ -590,13 +590,15 @@ build_claude_cmd() {
 execute_task() {
   local task_json="$1"
 
-  local task_id title repo prompt max_turns authority
+  local task_id title repo prompt max_turns authority category feature_branch
   task_id=$(echo "$task_json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')
   title=$(echo "$task_json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["title"])')
   repo=$(echo "$task_json" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("repo", "."))')
   prompt=$(echo "$task_json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["prompt"])')
   max_turns=$(echo "$task_json" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("max_turns", 25))' 2>/dev/null)
   authority=$(echo "$task_json" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("authority", "auto_safe"))' 2>/dev/null)
+  category=$(echo "$task_json" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("category", "task"))' 2>/dev/null || echo "task")
+  feature_branch=$(echo "$task_json" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("feature_branch", ""))' 2>/dev/null || echo "")
 
   log "┌─ Task: ${title}"
   log "│  ID:   ${task_id:0:8}"
@@ -646,7 +648,7 @@ execute_task() {
   # Non-operator tasks get their own branch
   if [[ "$authority" != "operator" ]]; then
     use_branch=true
-    branch="auto/${task_id:0:8}"
+    branch="auto/${category}/${task_id:0:8}"
 
     # Stash uncommitted TRACKED changes to protect live work.
     #
@@ -692,36 +694,64 @@ execute_task() {
       log "│  Ratchet baseline: ${RATCHET_BASELINE}"
     fi
 
-    # Check both local AND remote refs for existing branch (#14)
-    # Prior bug: only checked local refs, missed remote-only branches left by
-    # worktree cleanup. Those stale remote branches caused push failures.
+    # Fetch to check branch state (used for both feature-branch and auto-branch checks)
     git fetch origin --prune --quiet 2>/dev/null || true
-    local has_local_branch=false has_remote_branch=false
-    git rev-parse --verify "refs/heads/${branch}" >/dev/null 2>&1 && has_local_branch=true
-    git show-ref --verify --quiet "refs/remotes/origin/${branch}" 2>/dev/null && has_remote_branch=true
 
-    if $has_local_branch || $has_remote_branch; then
-      if $has_remote_branch; then
-        # Check if a stale PR is still open — close it
-        if command -v gh >/dev/null 2>&1; then
-          local remote_url_check repo_slug_check pr_state
-          remote_url_check=$(git remote get-url origin 2>/dev/null)
-          repo_slug_check=$(echo "$remote_url_check" | sed -E 's|.*github\.com[:/](.+)(\.git)?$|\1|' | sed 's/\.git$//')
-          pr_state=$(gh pr view "$branch" --repo "$repo_slug_check" --json state --jq .state 2>/dev/null || echo "NONE")
-          if [[ "$pr_state" == "OPEN" ]]; then
-            log "│  Closing stale PR on ${branch} (prior run left it open)"
-            gh pr close "$branch" --repo "$repo_slug_check" --comment "Superseded by task re-run (${task_id})" 2>/dev/null || true
-          fi
-        fi
-        git push origin --delete "$branch" 2>/dev/null || true
+    # ── Feature branch ratchet (#26) ────────────────────────────────────────
+    # When the task declares a feature_branch and ratchet is active, suppress
+    # auto/{category}/{task-id} branch creation and use the existing branch.
+    local feature_branch_mode=false
+    if [[ -n "$feature_branch" ]] && ratchet_enabled_for_task "$task_json"; then
+      local fb_exists=false
+      if git rev-parse --verify "refs/heads/${feature_branch}" >/dev/null 2>&1; then
+        fb_exists=true
+      elif git show-ref --verify --quiet "refs/remotes/origin/${feature_branch}" 2>/dev/null; then
+        fb_exists=true
       fi
-      if $has_local_branch; then
-        git branch -D "$branch" 2>/dev/null || true
+      if $fb_exists; then
+        log "│  Ratchet: feature branch '${feature_branch}' exists — suppressing auto-branch creation"
+        branch="$feature_branch"
+        feature_branch_mode=true
+        if ! git checkout "$feature_branch" 2>/dev/null && \
+           ! git checkout -b "$feature_branch" "origin/${feature_branch}" 2>/dev/null; then
+          log "│  ERROR: failed to checkout feature branch '${feature_branch}' — aborting task"
+          return 1
+        fi
+        log "│  Branch: ${branch} (existing)"
       fi
     fi
 
-    git checkout -b "$branch"
-    log "│  Branch: ${branch}"
+    if ! $feature_branch_mode; then
+      # Check both local AND remote refs for existing auto-branch (#14)
+      # Prior bug: only checked local refs, missed remote-only branches left by
+      # worktree cleanup. Those stale remote branches caused push failures.
+      local has_local_branch=false has_remote_branch=false
+      git rev-parse --verify "refs/heads/${branch}" >/dev/null 2>&1 && has_local_branch=true
+      git show-ref --verify --quiet "refs/remotes/origin/${branch}" 2>/dev/null && has_remote_branch=true
+
+      if $has_local_branch || $has_remote_branch; then
+        if $has_remote_branch; then
+          # Check if a stale PR is still open — close it
+          if command -v gh >/dev/null 2>&1; then
+            local remote_url_check repo_slug_check pr_state
+            remote_url_check=$(git remote get-url origin 2>/dev/null)
+            repo_slug_check=$(echo "$remote_url_check" | sed -E 's|.*github\.com[:/](.+)(\.git)?$|\1|' | sed 's/\.git$//')
+            pr_state=$(gh pr view "$branch" --repo "$repo_slug_check" --json state --jq .state 2>/dev/null || echo "NONE")
+            if [[ "$pr_state" == "OPEN" ]]; then
+              log "│  Closing stale PR on ${branch} (prior run left it open)"
+              gh pr close "$branch" --repo "$repo_slug_check" --comment "Superseded by task re-run (${task_id})" 2>/dev/null || true
+            fi
+          fi
+          git push origin --delete "$branch" 2>/dev/null || true
+        fi
+        if $has_local_branch; then
+          git branch -D "$branch" 2>/dev/null || true
+        fi
+      fi
+
+      git checkout -b "$branch"
+      log "│  Branch: ${branch}"
+    fi
 
     # Seed .git/info/exclude to block Windows-path directories that agents
     # sometimes create (e.g. C:\Users\...) which cause git ls-files to hang

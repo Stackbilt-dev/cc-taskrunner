@@ -311,11 +311,13 @@ Once a human approves, cc-taskrunner picks up the job via the D1 bridge (see iss
 
 ## Alternative Execution Backends
 
-cc-taskrunner uses the `claude` CLI (`claude -p`) for all task execution. Two Stackbilt alternatives are in development:
+The local shell runner uses the `claude` CLI (`claude -p`) for repo/file-editing execution. Stackbilt also maintains Cloudflare-native execution paths for tasks where the LLM output is the deliverable:
 
 **llm-gateway** ([Stackbilt-dev/llm-gateway](https://github.com/Stackbilt-dev/llm-gateway)) — local proxy that sits between `claude -p` and upstream providers. Routes by cognitive load: planning/code turns → Groq, tool_loop turns → Anthropic. Zero changes to cc-taskrunner required — just set `ANTHROPIC_BASE_URL` to the gateway. Run shadow mode first to see projected savings per session.
 
-**llm-providers** ([Stackbilt-dev/llm-providers](https://github.com/Stackbilt-dev/llm-providers)) — Workers-native direct API abstraction. A future re-architecture path that would remove the `claude` CLI dependency entirely. More control, more work. Appropriate if cc-taskrunner needs to run in a Workers/edge environment without a local machine.
+**@stackbilt/workers-ai-taskrunner** (`workers-ai/`) — Cloudflare-native executor for D1-backed `cc_tasks` where the LLM output is the deliverable. It replaces the local `claude -p` execution call with `@stackbilt/llm-providers` routing through the Workers AI binding. The default primary model is Workers AI GLM-5.2 (`@cf/zai-org/glm-5.2`) with Llama 4 Scout fallback. Use this for research, analysis, content generation, and wiki/update tasks that do not need shell, git, or local filesystem access.
+
+**llm-providers** ([Stackbilt-dev/llm-providers](https://github.com/Stackbilt-dev/llm-providers)) — Workers-native direct API abstraction used by the Workers AI executor. It owns Cloudflare model catalog validation, response normalization, usage accounting, and provider resiliency.
 
 Note: Anthropic policy change (2026-04-05) bills programmatic `claude -p` use at API rates rather than subscription rates. Budget accordingly or use llm-gateway to reduce Anthropic turn count.
 

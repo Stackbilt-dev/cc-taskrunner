@@ -7,6 +7,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 ## [Unreleased]
 
 ### Added
+- **Workers AI executor now defaults to GLM-5.2 via `@stackbilt/llm-providers`.** The Cloudflare-native taskrunner package uses `@cf/zai-org/glm-5.2` as its primary model, falls back to Llama 4 Scout, and requires `@stackbilt/llm-providers >=1.18.0` so model catalog validation recognizes the GLM-5.2 Workers AI model.
 - **README: Claude Code Routines vs cc-taskrunner comparison section.** Anthropic shipped Claude Code Routines (research preview) in April 2026 — saved Claude Code configurations that run on Anthropic's cloud on a schedule, via API trigger, or on GitHub events. Added a new section between "Why This Exists" and "Quick Start" with: a 12-row capability comparison table, explicit "when cc-taskrunner is right" / "when Routines are right" decision rubrics, and an honest disclosure that Stackbilt itself currently runs the taskrunner in paused mode and uses Routines for several scheduled workloads. Framing: complementary, not competitive — pick the substrate that fits the work.
 
 ## [1.6.0] — 2026-04-11
