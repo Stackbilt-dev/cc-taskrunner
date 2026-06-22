@@ -45,6 +45,8 @@ done
 err() { echo "ERROR: $*" >&2; exit 1; }
 
 [[ -n "$FIX_ID" ]] || err "--fix-id <uuid> is required"
+[[ "$FIX_ID" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]] \
+  || err "invalid UUID format: ${FIX_ID}"
 
 # ─── Validate env ────────────────────────────────────────────
 [[ -n "${CLOUDFLARE_API_TOKEN:-}" ]] || err "CLOUDFLARE_API_TOKEN is not set"
@@ -84,7 +86,8 @@ print(json.dumps({"sql": sys.argv[1], "params": json.loads(sys.argv[2])}))
 echo "Fetching fix ${FIX_ID} from D1 fix_queue ..." >&2
 
 SELECT_SQL="SELECT * FROM fix_queue WHERE id = ? AND fix_tier = 'QUEUED' AND status = 'pending'"
-fetch_resp="$(d1_query "$SELECT_SQL" "$(printf '["%s"]' "$FIX_ID")")"
+SELECT_PARAMS="$(python3 -c 'import json,sys; print(json.dumps([sys.argv[1]]))' "$FIX_ID")"
+fetch_resp="$(d1_query "$SELECT_SQL" "$SELECT_PARAMS")"
 
 # Validate response shape + extract the single row as JSON.
 ROW_JSON="$(python3 -c '
@@ -112,28 +115,11 @@ if $DRY_RUN; then
   exit 0
 fi
 
-# ─── 3. Claim the row (compare-and-set) ──────────────────────
-echo "Claiming fix ${FIX_ID} (status pending → in_progress) ..." >&2
-
-CLAIM_SQL="UPDATE fix_queue SET status = 'in_progress' WHERE id = ? AND status = 'pending'"
-claim_resp="$(d1_query "$CLAIM_SQL" "$(printf '["%s"]' "$FIX_ID")")"
-
-CHANGES="$(python3 -c '
-import json, sys
-resp = json.load(sys.stdin)
-if not resp.get("success", False):
-    sys.stderr.write("D1 claim update unsuccessful: %s\n" % json.dumps(resp.get("errors")))
-    sys.exit(2)
-results = resp.get("result") or []
-meta = results[0].get("meta", {}) if results else {}
-print(meta.get("changes", 0))
-' <<<"$claim_resp")" || exit 1
-
-if [[ "$CHANGES" != "1" ]]; then
-  err "Fix ${FIX_ID} already claimed by another runner (rows changed: ${CHANGES})"
-fi
-
-# ─── 4. Map D1 row → queue.json task and append ──────────────
+# ─── 3. Map D1 row → queue.json task and append ──────────────
+# Append BEFORE claiming in D1: if the append fails (missing repo, dup id,
+# write error), the D1 row is left untouched as 'pending' so another runner
+# can still pick it up. The D1 claim happens only after the local write
+# succeeds, and is rolled back (queue entry removed) if the claim is lost.
 init_queue() {
   [[ -f "$QUEUE_FILE" ]] || echo '[]' > "$QUEUE_FILE"
 }
@@ -150,10 +136,15 @@ created_at = sys.argv[3]
 
 fix_id = row["id"]
 
+repo = row.get("repo")
+if not repo:
+    sys.stderr.write("D1 row %s is missing the required \"repo\" field\n" % fix_id)
+    sys.exit(6)
+
 task = {
     "id": fix_id,
     "title": row.get("title") or f"CodeBeast fix {fix_id[:8]}",
-    "repo": row.get("repo") or ".",
+    "repo": repo,
     "prompt": row.get("prompt") or "",
     "authority": row.get("authority") or "auto_safe",
     "max_turns": int(row.get("max_turns") or 20),
@@ -181,6 +172,46 @@ if any(t.get("id") == fix_id for t in queue):
 queue.append(task)
 with open(queue_file, "w") as f:
     json.dump(queue, f, indent=2)
+' "$ROW_JSON" "$QUEUE_FILE" "$CREATED_AT" || err "failed to append fix ${FIX_ID} to queue.json (D1 row left as pending)"
 
-print("Pulled fix %s: %s -> queue.json" % (fix_id, task["title"]))
-' "$ROW_JSON" "$QUEUE_FILE" "$CREATED_AT"
+# Roll back the queue.json append (used if the D1 claim is lost).
+remove_from_queue() {
+  python3 -c '
+import json, sys
+queue_file, fix_id = sys.argv[1], sys.argv[2]
+with open(queue_file) as f:
+    queue = json.load(f)
+queue = [t for t in queue if t.get("id") != fix_id]
+with open(queue_file, "w") as f:
+    json.dump(queue, f, indent=2)
+' "$QUEUE_FILE" "$FIX_ID" 2>/dev/null || true
+}
+
+# ─── 4. Claim the row in D1 (compare-and-set) ────────────────
+echo "Claiming fix ${FIX_ID} (status pending → in_progress) ..." >&2
+
+CLAIM_SQL="UPDATE fix_queue SET status = 'in_progress' WHERE id = ? AND status = 'pending'"
+PARAMS="$(python3 -c 'import json,sys; print(json.dumps([sys.argv[1]]))' "$FIX_ID")"
+
+if ! claim_resp="$(d1_query "$CLAIM_SQL" "$PARAMS")"; then
+  remove_from_queue
+  err "D1 claim request failed for ${FIX_ID}; rolled back queue.json append"
+fi
+
+CHANGES="$(python3 -c '
+import json, sys
+resp = json.load(sys.stdin)
+if not resp.get("success", False):
+    sys.stderr.write("D1 claim update unsuccessful: %s\n" % json.dumps(resp.get("errors")))
+    sys.exit(2)
+results = resp.get("result") or []
+meta = results[0].get("meta", {}) if results else {}
+print(meta.get("changes", 0))
+' <<<"$claim_resp")" || { remove_from_queue; err "could not parse D1 claim response; rolled back queue.json append"; }
+
+if [[ "$CHANGES" != "1" ]]; then
+  remove_from_queue
+  err "Fix ${FIX_ID} already claimed by another runner (rows changed: ${CHANGES}); rolled back queue.json append"
+fi
+
+echo "Pulled fix ${FIX_ID} → queue.json"
