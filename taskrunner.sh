@@ -45,11 +45,12 @@ _CLEANUP_TMPFILES=()
 
 cleanup() {
   local exit_code=$?
-  # Kill active Claude child process to prevent credit burn / zombie on SIGINT/SIGTERM
+  # Kill active Claude process group to prevent credit burn / zombie on SIGINT/SIGTERM.
+  # Negative PID targets the whole group (setsid leader + claude/node children).
   if [[ -n "${_ACTIVE_PID:-}" ]]; then
-    kill -TERM "$_ACTIVE_PID" 2>/dev/null || true
+    kill -TERM -"$_ACTIVE_PID" 2>/dev/null || true
     sleep 1
-    kill -9 "$_ACTIVE_PID" 2>/dev/null || true
+    kill -9 -"$_ACTIVE_PID" 2>/dev/null || true
     _ACTIVE_PID=""
   fi
   if [[ ${#_CLEANUP_TMPFILES[@]} -gt 0 ]]; then
@@ -927,16 +928,19 @@ ${cross_repo_dirs}"
   export CC_CHECKPOINT_FILE="$checkpoint_file"
 
   local task_timeout="${CC_TASK_TIMEOUT:-1500}"  # 25 min default; override via CC_TASK_TIMEOUT
-  eval "$(build_claude_cmd "$mission_prompt" "$max_turns" "$all_dirs")" \
+  # setsid puts claude in its own process group so signals reach claude AND its
+  # node/child processes (group kill via negative PID), not just a subshell wrapper.
+  setsid bash -c "$(build_claude_cmd "$mission_prompt" "$max_turns" "$all_dirs")" \
     < /dev/null > "$output_file" 2>&1 &
   _ACTIVE_PID=$!
 
-  # Watchdog: kills claude after task_timeout seconds if still running
-  ( sleep "$task_timeout" && kill -TERM "$_ACTIVE_PID" 2>/dev/null ) &
+  # Watchdog: kills the claude process group after task_timeout seconds if still running
+  ( sleep "$task_timeout" && kill -TERM -"$_ACTIVE_PID" 2>/dev/null ) &
   local _watchdog_pid=$!
 
-  wait "$_ACTIVE_PID" 2>/dev/null
-  local _raw_exit=$?
+  # Capture exit code without tripping `set -e` on a non-zero claude exit.
+  local _raw_exit
+  wait "$_ACTIVE_PID" 2>/dev/null && _raw_exit=0 || _raw_exit=$?
   exit_code=$_raw_exit
 
   # Cancel watchdog (process already done)
@@ -946,7 +950,7 @@ ${cross_repo_dirs}"
   if [[ $_raw_exit -eq 143 ]]; then
     exit_code=124
     err "Task exceeded ${task_timeout}s timeout — Claude process terminated"
-    kill -9 "$_ACTIVE_PID" 2>/dev/null || true
+    kill -9 -"$_ACTIVE_PID" 2>/dev/null || true
     echo "TASK_BLOCKED: execution_timeout_${task_timeout}s" >> "$output_file"
   fi
   _ACTIVE_PID=""
