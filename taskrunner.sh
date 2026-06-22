@@ -35,6 +35,31 @@ DRY_RUN=false
 LOOP_MODE=false
 TASKS_RUN=0
 
+# PID of the in-flight Claude child process (empty when none running).
+# Tracked so cleanup() can terminate it on SIGINT/SIGTERM before exit.
+_ACTIVE_PID=""
+
+# Temp files registered for emergency cleanup if the script is killed
+# before execute_task's RETURN trap fires (e.g. SIGKILL of the loop).
+_CLEANUP_TMPFILES=()
+
+cleanup() {
+  local exit_code=$?
+  # Kill active Claude child process to prevent credit burn / zombie on SIGINT/SIGTERM
+  if [[ -n "${_ACTIVE_PID:-}" ]]; then
+    kill -TERM "$_ACTIVE_PID" 2>/dev/null || true
+    sleep 1
+    kill -9 "$_ACTIVE_PID" 2>/dev/null || true
+    _ACTIVE_PID=""
+  fi
+  if [[ ${#_CLEANUP_TMPFILES[@]} -gt 0 ]]; then
+    rm -f "${_CLEANUP_TMPFILES[@]}" 2>/dev/null || true
+    _CLEANUP_TMPFILES=()
+  fi
+  exit "$exit_code"
+}
+trap cleanup INT TERM
+
 # ─── Repo aliases ───────────────────────────────────────────
 # Alias file: one "alias=directory" per line (e.g. smart_revenue_recovery=smart_revenue_recovery_adf)
 declare -A REPO_ALIASES
@@ -590,15 +615,33 @@ build_claude_cmd() {
 execute_task() {
   local task_json="$1"
 
+  # Single-pass JSON extraction — one Python spawn instead of 8 (saves ~1s on WSL).
+  # shlex.quote makes every value safe to eval, regardless of quotes/specials in
+  # the JSON. JSON arrives on stdin so it is never interpolated into the script.
   local task_id title repo prompt max_turns authority category feature_branch
-  task_id=$(echo "$task_json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')
-  title=$(echo "$task_json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["title"])')
-  repo=$(echo "$task_json" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("repo", "."))')
-  prompt=$(echo "$task_json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["prompt"])')
-  max_turns=$(echo "$task_json" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("max_turns", 25))' 2>/dev/null)
-  authority=$(echo "$task_json" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("authority", "auto_safe"))' 2>/dev/null)
-  category=$(echo "$task_json" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("category", "task"))' 2>/dev/null || echo "task")
-  feature_branch=$(echo "$task_json" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("feature_branch", ""))' 2>/dev/null || echo "")
+  eval "$(printf '%s' "$task_json" | python3 -c '
+import json, sys, shlex
+fields = [
+    ("task_id", "id", None),
+    ("title", "title", None),
+    ("repo", "repo", "."),
+    ("prompt", "prompt", None),
+    ("max_turns", "max_turns", 25),
+    ("authority", "authority", "auto_safe"),
+    ("category", "category", "task"),
+    ("feature_branch", "feature_branch", ""),
+]
+try:
+    d = json.load(sys.stdin)
+    for var, key, default in fields:
+        val = d[key] if default is None else d.get(key, default)
+        if val is None:
+            val = ""
+        print(var + "=" + shlex.quote(str(val)))
+except Exception as e:
+    print("task_id=" + shlex.quote(""))
+    print("title=" + shlex.quote("JSON parse error: " + str(e)))
+')"
 
   log "┌─ Task: ${title}"
   log "│  ID:   ${task_id:0:8}"
@@ -852,6 +895,8 @@ MISSION
   local output_file checkpoint_file exit_code=0
   output_file=$(mktemp /tmp/cc-task-XXXXXX.json)
   checkpoint_file=$(mktemp /tmp/cc-task-checkpoint-XXXXXX.json)
+  # Emergency fallback if the script is SIGKILLed before the RETURN trap fires.
+  _CLEANUP_TMPFILES=("$output_file" "$pre_snapshot" "$checkpoint_file")
   trap "rm -f ${output_file} ${pre_snapshot} ${checkpoint_file}" RETURN
 
   # Detect cross-repo dirs for --add-dir (prompt may reference other repos)
@@ -880,8 +925,31 @@ ${cross_repo_dirs}"
   cd "$repo_path"
   unset CLAUDECODE CLAUDE_CODE_ENTRYPOINT 2>/dev/null || true
   export CC_CHECKPOINT_FILE="$checkpoint_file"
+
+  local task_timeout="${CC_TASK_TIMEOUT:-1500}"  # 25 min default; override via CC_TASK_TIMEOUT
   eval "$(build_claude_cmd "$mission_prompt" "$max_turns" "$all_dirs")" \
-    < /dev/null > "$output_file" 2>&1 || exit_code=$?
+    < /dev/null > "$output_file" 2>&1 &
+  _ACTIVE_PID=$!
+
+  # Watchdog: kills claude after task_timeout seconds if still running
+  ( sleep "$task_timeout" && kill -TERM "$_ACTIVE_PID" 2>/dev/null ) &
+  local _watchdog_pid=$!
+
+  wait "$_ACTIVE_PID" 2>/dev/null
+  local _raw_exit=$?
+  exit_code=$_raw_exit
+
+  # Cancel watchdog (process already done)
+  { kill "$_watchdog_pid" && wait "$_watchdog_pid"; } 2>/dev/null || true
+
+  # SIGTERM (143) = watchdog fired = timeout
+  if [[ $_raw_exit -eq 143 ]]; then
+    exit_code=124
+    err "Task exceeded ${task_timeout}s timeout — Claude process terminated"
+    kill -9 "$_ACTIVE_PID" 2>/dev/null || true
+    echo "TASK_BLOCKED: execution_timeout_${task_timeout}s" >> "$output_file"
+  fi
+  _ACTIVE_PID=""
   unset CC_CHECKPOINT_FILE
 
   # Detect max_turns exceeded from JSON output (#15)
@@ -1076,6 +1144,10 @@ ${result_text}"
   local status="completed"
   [[ $exit_code -ne 0 ]] && status="failed"
   update_task_status "$task_id" "$status" "$result_text"
+
+  # Immediate temp cleanup — result_text is already extracted, files no longer needed.
+  rm -f "$output_file" "$pre_snapshot" "$checkpoint_file"
+  _CLEANUP_TMPFILES=()
 
   if [[ $exit_code -eq 0 ]]; then
     log "└─ COMPLETED${pr_url:+ (PR: ${pr_url})}"
