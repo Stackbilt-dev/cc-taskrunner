@@ -81,6 +81,7 @@ while [[ $# -gt 0 ]]; do
     --dry-run) DRY_RUN=true; shift ;;
     --turns)   MAX_TURNS="$2"; shift 2 ;;
     add)       ACTION="add"; shift; break ;;
+    pull)      ACTION="pull"; shift; break ;;
     list)      ACTION="list"; shift ;;
     *)         echo "Unknown arg: $1" >&2; exit 1 ;;
   esac
@@ -1168,6 +1169,10 @@ ${result_text}"
 if [[ "$ACTION" == "add" ]]; then
   add_task "$*"
   exit 0
+fi
+
+if [[ "$ACTION" == "pull" ]]; then
+  exec "${SCRIPT_DIR}/scripts/pull-fix.sh" "$@"
 fi
 
 if [[ "$ACTION" == "list" ]]; then
