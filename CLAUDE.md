@@ -8,13 +8,19 @@ Autonomous task queue for Claude Code with safety hooks, branch isolation, and P
 - `./taskrunner.sh --loop` — Loop forever (poll every 60s)
 - `./taskrunner.sh --dry-run` — Preview without executing
 - `./taskrunner.sh add "title"` — Add a task to the queue
+- `./taskrunner.sh pull --fix-id <uuid>` — Pull a QUEUED fix from CodeBeast D1 into queue.json
+- `./taskrunner.sh pull --fix-id <uuid> --dry-run` — Preview D1 row without writing anything
+
+## Key env vars
+- `CC_TASK_TIMEOUT` — Watchdog timeout in seconds (default 1500 / 25 min); tasks exceeding this are marked TASK_BLOCKED
+- `CLOUDFLARE_API_TOKEN` / `CF_ACCOUNT_ID` / `D1_FIX_QUEUE_DB_ID` — Required for `pull` subcommand
 
 ## Structure
-- `taskrunner.sh` — Main script (~610 lines bash + embedded python)
+- `taskrunner.sh` — Main script (~1150 lines bash + embedded python)
 - `hooks/` — Safety hook scripts (block-interactive, safety-gate, syntax-check)
 - `queue.json` — Task queue file (JSON array, gitignored; see queue.example.json)
 - `repo-aliases.conf` — Repo alias mappings (gitignored; see repo-aliases.example.conf)
-- `scripts/` — Helper scripts (deploy)
+- `scripts/` — Helper scripts (deploy, pull-fix.sh, cleanup-branches.sh)
 - `plugin/` — Plugin system (agents, commands, safety)
 
 ## Conventions

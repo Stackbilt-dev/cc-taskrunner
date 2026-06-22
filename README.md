@@ -220,6 +220,31 @@ If a blocker fails, all tasks that depend on it are automatically cancelled.
 ./taskrunner.sh --turns 15
 ```
 
+### Pull from CodeBeast D1
+
+When CodeBeast classifies a GitHub issue as `MULTI_FILE` complexity, it writes a fix job to its D1 `fix_queue` and posts an **AWAITING APPROVAL** comment with a Fix ID. After human review, pull the approved fix into the local queue:
+
+```bash
+# Preview what would be pulled (no writes)
+./taskrunner.sh pull --fix-id <uuid> --dry-run
+
+# Pull the fix into queue.json and claim it in D1
+./taskrunner.sh pull --fix-id <uuid>
+
+# Then run it
+./taskrunner.sh --max 1
+```
+
+**Required env vars for `pull`:**
+
+| Variable | Description |
+|----------|-------------|
+| `CLOUDFLARE_API_TOKEN` | CF API token with D1 read/write permissions |
+| `CF_ACCOUNT_ID` | Cloudflare account ID |
+| `D1_FIX_QUEUE_DB_ID` | D1 database ID for CodeBeast's `fix_queue` |
+
+The bridge uses a compare-and-set guard — two runners cannot claim the same fix. If the `queue.json` write fails for any reason, D1 is left untouched and the fix remains available for retry.
+
 ### Environment Variables
 
 | Variable | Default | Description |
@@ -237,6 +262,7 @@ If a blocker fails, all tasks that depend on it are automatically cancelled.
 | `CC_BLAST_BLOCK` | `50` | Blast radius threshold for `critical` severity (auto_safe execution refused) |
 | `CC_BLAST_TIMEOUT` | `60` | Timeout in seconds for `charter blast` (per task) |
 | `CC_BUDGET_PROFILE` | *(unset)* | Preset credit budget configuration: `conservative` (max 3 tasks, 10 turns), `normal` (max 5 tasks, 20 turns), `aggressive` (existing defaults). Overridden by explicit `--max`, `--turns`, `CC_MAX_TASKS`, or `CC_MAX_TURNS`. |
+| `CC_TASK_TIMEOUT` | `1500` | Seconds before the watchdog sends `SIGTERM` to the active claude process group. Tasks that exceed the deadline are marked `TASK_BLOCKED: execution_timeout_Xs` and the loop continues. Set to `0` to disable (not recommended for unattended runs). |
 
 ## Charter Integration (optional)
 
@@ -288,26 +314,41 @@ When `charter blast --format json` is available, the runner extracts file paths 
 
 cc-taskrunner is the execution backend for CodeBeast's QUEUED-tier autonomous fix pipeline. When CodeBeast classifies a GitHub issue as `MULTI_FILE` complexity, it writes a fix job to its D1 `fix_queue` table and posts an **AWAITING APPROVAL** comment on the issue with a Fix ID.
 
-Once a human approves, cc-taskrunner picks up the job via the D1 bridge (see issue #28).
-
-**D1 bridge status**: planned — not yet built. Track at [Stackbilt-dev/cc-taskrunner#28](https://github.com/Stackbilt-dev/cc-taskrunner/issues/28).
-
-**Manual workflow (current)**:
-1. CodeBeast posts "AWAITING APPROVAL" comment with Fix ID on the GitHub issue
+**Workflow:**
+1. CodeBeast posts "AWAITING APPROVAL" comment with a Fix ID (UUID) on the GitHub issue
 2. Human reviews the analysis (affected files, governance tier, reasoning)
-3. Human manually adds the task to `queue.json` using the Fix ID and prompt from the comment
-4. cc-taskrunner executes on next loop iteration
+3. Human runs `./taskrunner.sh pull --fix-id <uuid>` — this fetches the fix from D1 and appends it to `queue.json`
+4. cc-taskrunner executes the fix on the next `./taskrunner.sh` run
 
-**Fix job schema from D1**:
-| Field | queue.json mapping |
-|---|---|
-| `id` | `id` |
-| `title` | `title` |
-| `prompt` | `prompt` |
-| `authority` | `authority` (`auto_safe` or `operator`) |
-| `max_turns` | `max_turns` (default 20) |
-| `repo` | `repo` |
-| `origin_branch` | branch base for `fix/codebeast-{id[:8]}` |
+**Safety guarantees:**
+- Approval is always manual — `pull` never auto-triggers
+- A compare-and-set guard (`status = 'pending' → 'in_progress'` with row-count check) prevents two runners from claiming the same fix simultaneously
+- `queue.json` is written before the D1 claim; a failed write leaves D1 untouched so the fix remains re-claimable
+- `--dry-run` prints the full D1 row without touching anything
+
+**Required env vars:**
+
+| Variable | Description |
+|----------|-------------|
+| `CLOUDFLARE_API_TOKEN` | CF API token with D1 read/write permissions |
+| `CF_ACCOUNT_ID` | Cloudflare account ID |
+| `D1_FIX_QUEUE_DB_ID` | D1 database ID for CodeBeast's `fix_queue` |
+
+**D1 → queue.json field mapping:**
+
+| D1 field | queue.json field | Notes |
+|---|---|---|
+| `id` | `id` | UUID |
+| `title` | `title` | Falls back to `CodeBeast fix {id[:8]}` |
+| `prompt` | `prompt` | |
+| `authority` | `authority` | Defaults to `auto_safe` |
+| `max_turns` | `max_turns` | Defaults to `20` |
+| `repo` | `repo` | Required — error if missing |
+| `origin_branch` | `feature_branch` | Optional branch base |
+| `issue_url` | `issue_url` | Optional, passed through |
+| `correlation_id` | `correlation_id` | Optional, passed through |
+| *(bridge)* | `origin` | Always `"d1_fix_queue"` |
+| *(bridge)* | `fix_queue_id` | UUID, for traceability |
 
 ## Alternative Execution Backends
 
